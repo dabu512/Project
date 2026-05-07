@@ -26,9 +26,9 @@ function haversine(lat1, lon1, lat2, lon2) {
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) *
-    Math.cos((lat2 * Math.PI) / 180) *
-    Math.sin(dLon / 2) *
-    Math.sin(dLon / 2);
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
@@ -64,6 +64,54 @@ function isConnectedSubgraph(unitIds, adjList) {
   return visited.size === idSet.size;
 }
 
+// Đo độ thuôn dài (elongation) bằng tỷ lệ eigenvalue
+// Eigenvalue ratio ≈ 1 → hình tròn, >> 1 → hình dài
+function computeElongation(unitIds, unitMap) {
+  const n = unitIds.length;
+  if (n <= 2) return 1;
+
+  // Tính trung bình tọa độ centroid
+  let mx = 0,
+    my = 0;
+  for (const id of unitIds) {
+    mx += unitMap[id].cx;
+    my += unitMap[id].cy;
+  }
+  mx /= n;
+  my /= n;
+
+  // Ma trận hiệp phương sai 2x2
+  let cxx = 0,
+    cyy = 0,
+    cxy = 0;
+  for (const id of unitIds) {
+    const dx = unitMap[id].cx - mx;
+    const dy = unitMap[id].cy - my;
+    cxx += dx * dx;
+    cyy += dy * dy;
+    cxy += dx * dy;
+  }
+
+  // Eigenvalues: λ = trace/2 ± sqrt(trace²/4 - det)
+  const trace = cxx + cyy;
+  const det = cxx * cyy - cxy * cxy;
+  const disc = Math.sqrt(Math.max(0, (trace * trace) / 4 - det));
+  const lambda1 = trace / 2 + disc;
+  const lambda2 = trace / 2 - disc;
+
+  return lambda2 > 1e-10 ? lambda1 / lambda2 : 100;
+}
+
+// Tính elongation penalty chuẩn hóa cho toàn bộ solution
+function calcElongationPenalty(territories, unitMap, p) {
+  let penalty = 0;
+  for (let i = 0; i < p; i++) {
+    const elong = computeElongation(territories[i].units, unitMap);
+    penalty += Math.max(0, elong - 3.0); // Phạt khi ratio > 3
+  }
+  return penalty / p;
+}
+
 // Tìm ô biên chưa gán của một vùng
 function getBorderCandidates(territoryUnits, adjList, assigned) {
   const candidates = new Set();
@@ -84,6 +132,11 @@ async function runGRASP(versionId, config) {
   const alpha = config.alpha || 0.05;
   const TOP_K = Math.min(config.filterTop || 50, MAX_ITER);
   const MAX_LS_MOVES = config.maxLocalSearchMoves || 500;
+  const compactWeight =
+    typeof config.compactnessWeight === "number"
+      ? config.compactnessWeight
+      : 0.12;
+  const balanceWeight = 0.5; // Luôn set hệ số cân bằng là 0.5
 
   // --- FETCH DATA ---
   let unitsRes;
@@ -152,6 +205,20 @@ async function runGRASP(versionId, config) {
   // --- PRE-COMPUTE ---
   const unitMap = {};
   units.forEach((u) => (unitMap[u.id] = u));
+
+  const compactPenaltyFor = (unitIds) =>
+    Math.max(0, computeElongation(unitIds, unitMap) - 3.0) / 10;
+
+  const territoryDispersion = (unitIds) => {
+    const center = computeCenter(unitIds);
+    return unitIds.reduce((sum, uid) => sum + getDistToCenter(uid, center), 0);
+  };
+
+  const territoryBalancePenalty = (customerTotal) =>
+    mu1 > 0 ? Math.abs(customerTotal - mu1) : 0;
+
+  const solutionCompactnessPenalty = (territories) =>
+    calcElongationPenalty(territories, unitMap, p);
 
   const distMap = {};
   let globalMaxDist = 0;
@@ -326,8 +393,10 @@ async function runGRASP(versionId, config) {
           // f_dev(j,t*) = (1/μ) * |w(V_t* ∪ {j}) - μ|
           let newCust = t.customers + (u.customer_count || 0);
           let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
+          let f_compact = compactWeight > 0 ? compactPenaltyFor(newUnits) : 0;
 
-          let phi = lambda * f_disp + (1 - lambda) * f_dev;
+          let phi =
+            lambda * f_disp + balanceWeight * f_dev + compactWeight * f_compact;
           phiVals.push({ id: j, tIdx: idx, phi });
           if (phi < phiMin) phiMin = phi;
           if (phi > phiMax) phiMax = phi;
@@ -375,16 +444,11 @@ async function runGRASP(versionId, config) {
         }
         if (components.length <= 1) continue;
         components.sort((a, b) => b.length - a.length);
-        const mainComp = new Set(components[0]);
         for (let ci = 1; ci < components.length; ci++) {
           for (const orphanId of components[ci]) {
             let bestTarget = -1,
               bestImprove = -Infinity;
             for (const nb of adjList[orphanId]) {
-              if (mainComp.has(nb)) {
-                bestTarget = i;
-                break;
-              }
               for (let j = 0; j < p; j++) {
                 if (j !== i && territories[j].units.includes(nb)) {
                   const uC = unitMap[orphanId].customer_count || 0;
@@ -397,7 +461,6 @@ async function runGRASP(versionId, config) {
                   }
                 }
               }
-              if (bestTarget === i) break;
             }
             if (bestTarget >= 0 && bestTarget !== i) {
               t.units = t.units.filter((id) => id !== orphanId);
@@ -417,7 +480,7 @@ async function runGRASP(versionId, config) {
       if (!hadRepair) break;
     }
 
-    // 1e. Tính ρ(S) theo paper để đánh giá solution
+    // 1e. Tính ρ(S) theo paper
     // ρ(S) = 2·f_disp(S) / ((|V|-p)·d_max) + f_Tdev / p
     let fDispS = 0; // f_disp(S) = Σ_t Σ_j d_j(c_t)
     let fTdev = 0; // f_Tdev = Σ_t (1/μ) * |w(V_t) - μ|
@@ -429,7 +492,9 @@ async function runGRASP(versionId, config) {
     }
     let rho =
       globalMaxDist > 0 && units.length > p
-        ? (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p
+        ? (2 * fDispS) / ((units.length - p) * globalMaxDist) +
+          fTdev / p +
+          compactWeight * calcElongationPenalty(territories, unitMap, p)
         : Infinity;
 
     allSolutions.push({
@@ -465,7 +530,7 @@ async function runGRASP(versionId, config) {
   //  PHA 3: RELINKED LOCAL SEARCH trên các giải pháp đã lọc
   //  Theo paper: N(S) = {(i,j) ∈ E : q(i) ≠ q(j)}
   //  Move operator: move(i,j) chuyển node i từ q(i) sang q(j)
-  //  Tối ưu lần lượt z1 → z2 → z1 → z2 (relinked)
+  //  Tối ưu lần lượt z1 → z2 → z3 (relinked)
   // ================================================================
   let bestSolution = filtered[0].territories;
   let bestRho = filtered[0].rho;
@@ -500,7 +565,7 @@ async function runGRASP(versionId, config) {
     };
 
     let lsMoves = 0;
-    let currentObj = 0; // 0=z1(dispersion), 1=z2(balance)
+    let currentObj = 0; // 0=z1(dispersion), 1=z2(balance), 2=z3(compactness)
     let noImproveCycles = 0;
 
     while (lsMoves < MAX_LS_MOVES && noImproveCycles < 4) {
@@ -526,24 +591,34 @@ async function runGRASP(versionId, config) {
         let shouldMove = false;
 
         if (currentObj === 0) {
-          // z1: Σ d_j(c_t) cho 2 vùng liên quan phải giảm
-          let oldZ1 = 0,
-            newZ1 = 0;
-          for (const id of t.units) oldZ1 += getDistToCenter(id, t.center);
-          for (const id of t2.units) oldZ1 += getDistToCenter(id, t2.center);
-          let nc1 = computeCenter(t1New);
-          let nc2 = computeCenter(t2New);
-          for (const id of t1New) newZ1 += getDistToCenter(id, nc1);
-          for (const id of t2New) newZ1 += getDistToCenter(id, nc2);
+          // z1: total dispersion of the two territories must decrease
+          let oldZ1 =
+            territoryDispersion(t.units) + territoryDispersion(t2.units);
+          let newZ1 = territoryDispersion(t1New) + territoryDispersion(t2New);
           shouldMove = newZ1 < oldZ1;
-        } else {
-          // z2: (1/μ) * max_t |w(V_t) - μ| phải giảm
-          let oldDev =
-            Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
-          let newDev =
-            Math.abs(t.customers - uCust - mu1) +
-            Math.abs(t2.customers + uCust - mu1);
+        } else if (currentObj === 1) {
+          // z2: max balance deviation over the two territories must decrease
+          let oldDev = Math.max(
+            territoryBalancePenalty(t.customers),
+            territoryBalancePenalty(t2.customers),
+          );
+          let newDev = Math.max(
+            territoryBalancePenalty(t.customers - uCust),
+            territoryBalancePenalty(t2.customers + uCust),
+          );
           shouldMove = newDev < oldDev;
+        } else {
+          // z3: total compactness penalty of the two territories must decrease
+          let oldC = compactPenaltyFor(t.units) + compactPenaltyFor(t2.units);
+          let newC = compactPenaltyFor(t1New) + compactPenaltyFor(t2New);
+          shouldMove = newC < oldC;
+        }
+
+        // Compactness guard: từ chối move nếu tạo ra vùng quá thuôn dài
+        if (shouldMove && t1New.length >= 3 && t2New.length >= 3) {
+          let newElong1 = computeElongation(t1New, unitMap);
+          let newElong2 = computeElongation(t2New, unitMap);
+          if (newElong1 > 6 || newElong2 > 6) shouldMove = false;
         }
 
         if (!shouldMove) continue;
@@ -585,7 +660,7 @@ async function runGRASP(versionId, config) {
 
       if (!improved) {
         noImproveCycles++;
-        currentObj = (currentObj + 1) % 2; // Chuyển objective (relinked)
+        currentObj = (currentObj + 1) % 3; // Chuyển objective (relinked)
       } else {
         noImproveCycles = 0;
       }
@@ -593,7 +668,7 @@ async function runGRASP(versionId, config) {
 
     totalLsMoves += lsMoves;
 
-    // Đánh giá lại ρ(S) sau Local Search
+    // Đánh giá lại ρ(S) sau Local Search với compactness penalty
     let fDispS = 0,
       fTdev = 0;
     for (let i = 0; i < p; i++) {
@@ -602,7 +677,10 @@ async function runGRASP(versionId, config) {
         fDispS += getDistToCenter(uid, sol[i].center);
       fTdev += mu1 > 0 ? Math.abs(sol[i].customers - mu1) / mu1 : 0;
     }
-    let rho = (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p;
+    let rho =
+      (2 * fDispS) / ((units.length - p) * globalMaxDist) +
+      fTdev / p +
+      compactWeight * solutionCompactnessPenalty(sol);
 
     if (rho < bestRho) {
       bestRho = rho;
@@ -617,6 +695,82 @@ async function runGRASP(versionId, config) {
       );
     }
     await new Promise((r) => setTimeout(r, 2));
+  }
+
+  // ================================================================
+  //  PHA 4: PENINSULA TRIMMING (Dọn dẹp "bán đảo")
+  //  Quét ô bị bao quanh chủ yếu bởi vùng khác → chuyển về đúng chỗ
+  // ================================================================
+  reportProgress(
+    MAX_ITER,
+    MAX_ITER,
+    "Peninsula Trimming — dọn dẹp hình dạng...",
+  );
+
+  // Xây assignMap cho bestSolution
+  let bestAssignMap = {};
+  for (let i = 0; i < p; i++) {
+    for (const uid of bestSolution[i].units) bestAssignMap[uid] = i;
+  }
+
+  for (let trimRound = 0; trimRound < 10; trimRound++) {
+    let trimmed = false;
+
+    for (let ti = 0; ti < p; ti++) {
+      const t = bestSolution[ti];
+      if (t.units.length <= 2) continue;
+
+      // Tìm các ô "bán đảo": >= 60% hàng xóm thuộc vùng khác
+      const peninsulas = [];
+      for (const uid of t.units) {
+        const neighbors = [...adjList[uid]];
+        if (neighbors.length === 0) continue;
+        const sameCount = neighbors.filter(
+          (n) => bestAssignMap[n] === ti,
+        ).length;
+        if (sameCount <= neighbors.length * 0.4) {
+          // Tìm vùng đích (vùng chiếm đa số hàng xóm)
+          const neighborCounts = {};
+          for (const n of neighbors) {
+            const nt = bestAssignMap[n];
+            if (nt !== undefined && nt !== ti) {
+              neighborCounts[nt] = (neighborCounts[nt] || 0) + 1;
+            }
+          }
+          let bestTarget = -1,
+            bestCount = 0;
+          for (const [tgt, cnt] of Object.entries(neighborCounts)) {
+            if (cnt > bestCount) {
+              bestCount = cnt;
+              bestTarget = parseInt(tgt);
+            }
+          }
+          if (bestTarget >= 0) peninsulas.push({ uid, target: bestTarget });
+        }
+      }
+
+      for (const { uid, target } of peninsulas) {
+        // Kiểm tra liên thông sau khi bỏ ô
+        const remaining = t.units.filter((id) => id !== uid);
+        if (remaining.length === 0) continue;
+        if (!isConnectedSubgraph(remaining, adjList)) continue;
+
+        // Thực hiện chuyển
+        t.units = remaining;
+        t.customers -= unitMap[uid].customer_count || 0;
+        bestSolution[target].units.push(uid);
+        bestSolution[target].customers += unitMap[uid].customer_count || 0;
+        bestAssignMap[uid] = target;
+        trimmed = true;
+      }
+    }
+
+    if (!trimmed) break;
+  }
+
+  // Cập nhật center sau trimming
+  for (let i = 0; i < p; i++) {
+    bestSolution[i].center = computeCenter(bestSolution[i].units);
   }
 
   // --- FINAL VALIDATION ---
@@ -689,6 +843,6 @@ async function runGRASP(versionId, config) {
   } catch (err) {
     reportError(err);
   } finally {
-    pool.end().catch(() => { });
+    pool.end().catch(() => {});
   }
 })();

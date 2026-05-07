@@ -167,17 +167,17 @@
           <div style="margin-bottom: 10px; font-weight: bold; font-size: 13px;">
             Đã chọn: <span id="bulk-count" style="color: var(--accent);">0</span> ô
           </div>
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
-            <button class="btn-blue" onclick="window.startBulkMerge()" title="Gộp ô">
+          <div style="display:flex; flex-wrap: wrap; justify-content: center; gap:8px;">
+            <button class="btn-blue" onclick="window.startBulkMerge()" title="Gộp ô" style="width: 80px; height: 40px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; gap: 2px; margin: 0;">
               <i class="fa-solid fa-object-group"></i> Gộp
             </button>
-            <button class="btn-copy" onclick="window.copySelectedUnits()" title="Copy thông tin">
+            <button class="btn-copy" onclick="window.copySelectedUnits()" title="Copy thông tin" style="width: 80px; height: 40px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; gap: 2px; margin: 0;">
               <i class="fa-solid fa-copy"></i> Copy
             </button>
-            <button class="btn-copy" style="background-color: #27ae60;" onclick="window.pasteUnits()" title="Paste thông tin">
+            <button class="btn-copy" style="background-color: #27ae60; width: 80px; height: 40px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; gap: 2px; margin: 0;" onclick="window.pasteUnits()" title="Paste thông tin">
               <i class="fa-solid fa-paste"></i> Paste
             </button>
-            <button class="btn-red" onclick="window.deleteSelectedUnits()" title="Xóa các ô đã chọn">
+            <button class="btn-red" onclick="window.deleteSelectedUnits()" title="Xóa các ô đã chọn" style="width: 80px; height: 40px; padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; gap: 2px; margin: 0;">
               <i class="fa-solid fa-trash"></i> Xóa
             </button>
           </div>

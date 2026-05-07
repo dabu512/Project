@@ -74,11 +74,20 @@ window.setCursorMode = function (mode) {
 };
 
 // ================================================================
+//  THEO DÕI VỊ TRÍ CHUỘT & CLIPBOARD GEOMETRY
+// ================================================================
+window._lastMouseLatLng = null;
+window._clipboardFeatures = [];
+
+// ================================================================
 //  PHÍM TẮT & PASTE LOGIC
 // ================================================================
 window.addEventListener('keydown', function(e) {
+    // Không xử lý nếu đang gõ trong input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
     if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        if (window.isBulkSelectMode && window.selectedUnitsList.length > 0) {
+        if (window.selectedUnitsList.length > 0) {
             window.copySelectedUnits();
         }
     }
@@ -88,74 +97,131 @@ window.addEventListener('keydown', function(e) {
 });
 
 window.pasteUnits = async function() {
-    try {
-        const text = await navigator.clipboard.readText();
-        if (!text || !text.includes('Đã chọn')) {
-            return Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Clipboard không chứa dữ liệu ô đa giác hợp lệ!', timer: 2000, showConfirmButton: false });
-        }
-        
-        // Parse đơn giản (Ví dụ: thông báo là đã nhận dữ liệu)
-        // Trong thực tế có thể tạo mới ô dựa trên text nếu có tọa độ, 
-        // nhưng hiện tại copySelectedUnits chỉ copy text mô tả.
-        // Ta có thể dùng nó để "dán" thuộc tính vào các ô đang chọn.
-        
-        if (window.selectedUnitsList.length === 0) {
-            return Swal.fire("Thông báo", "Vui lòng chọn các ô mục tiêu để dán thuộc tính (Tên/Khách/Đơn).", "info");
-        }
+    if (!window._clipboardFeatures || window._clipboardFeatures.length === 0) {
+        // Fallback sang paste thuộc tính nếu clipboard text có dữ liệu
+        try {
+            const text = await navigator.clipboard.readText();
+            if (text && text.includes('Đã chọn')) {
+                return window.pasteAttributes(text); 
+            }
+        } catch(e) {}
+        return Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Chưa copy ô đa giác nào!', timer: 2000, showConfirmButton: false });
+    }
 
-        const lines = text.split('\n');
-        const dataLine = lines.find(l => l.includes('Tên:'));
-        if (!dataLine) return;
+    if (!window._lastMouseLatLng) {
+        return Swal.fire("Thông báo", "Hãy di chuột vào bản đồ để xác định vị trí dán.", "info");
+    }
 
-        const nameMatch = dataLine.match(/Tên: (.*?) \|/);
-        const custMatch = dataLine.match(/Khách: (\d+)/);
-        const orderMatch = dataLine.match(/Đơn: (\d+)/);
-        const colorMatch = dataLine.match(/Màu: (#\w+)/);
-
-        const newData = {
-            name: nameMatch ? nameMatch[1] : null,
-            customers: custMatch ? parseInt(custMatch[1]) : 0,
-            orders: orderMatch ? parseInt(orderMatch[1]) : 0,
-            color: colorMatch ? colorMatch[1] : null
-        };
-
-        const { isConfirmed } = await Swal.fire({
-            title: 'Dán thuộc tính?',
-            html: `Áp dụng thông tin sau cho <b>${window.selectedUnitsList.length}</b> ô đang chọn:<br>
-                   - Tên: ${newData.name || 'Giữ nguyên'}<br>
-                   - Khách: ${newData.customers}<br>
-                   - Đơn: ${newData.orders}<br>
-                   - Màu: <span style="display:inline-block;width:12px;height:12px;background:${newData.color}"></span> ${newData.color || 'Giữ nguyên'}`,
-            icon: 'question',
-            showCancelButton: true,
-            confirmButtonText: 'Dán ngay'
+    // 1. Tính tâm của cụm đã copy (Centroid of bounding box)
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    window._clipboardFeatures.forEach(f => {
+        const coords = f.geometry.type === 'Polygon' ? f.geometry.coordinates[0] : f.geometry.coordinates[0][0];
+        coords.forEach(pt => {
+            if (pt[1] < minLat) minLat = pt[1];
+            if (pt[1] > maxLat) maxLat = pt[1];
+            if (pt[0] < minLng) minLng = pt[0];
+            if (pt[0] > maxLng) maxLng = pt[0];
         });
+    });
+    const centerLat = (minLat + maxLat) / 2;
+    const centerLng = (minLng + maxLng) / 2;
 
-        if (!isConfirmed) return;
+    // 2. Tính độ lệch so với chuột
+    const dLat = window._lastMouseLatLng.lat - centerLat;
+    const dLng = window._lastMouseLatLng.lng - centerLng;
 
+    const { isConfirmed } = await Swal.fire({
+        title: 'Dán ô đa giác?',
+        text: `Bạn có muốn nhân bản ${window._clipboardFeatures.length} ô vào vị trí con trỏ chuột?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Dán ngay'
+    });
+
+    if (!isConfirmed) return;
+
+    document.getElementById('loading-screen').style.display = 'flex';
+    let successCount = 0;
+    
+    for (const f of window._clipboardFeatures) {
+        // Shift geometry
+        const newGeom = JSON.parse(JSON.stringify(f.geometry));
+        const shiftCoords = (pts) => pts.map(pt => [pt[0] + dLng, pt[1] + dLat]);
+        
+        if (newGeom.type === 'Polygon') {
+            newGeom.coordinates = newGeom.coordinates.map(ring => shiftCoords(ring));
+        } else if (newGeom.type === 'MultiPolygon') {
+            newGeom.coordinates = newGeom.coordinates.map(poly => poly.map(ring => shiftCoords(ring)));
+        }
+
+        try {
+            const res = await fetch('/api/units', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: f.properties.name + ' (Copy)',
+                    geometry: newGeom,
+                    customer_count: f.properties.customers,
+                    order_count: f.properties.orders,
+                    color: f.properties.color,
+                    version_id: window.currentVersionId
+                })
+            });
+            const data = await res.json();
+            if (data.success) successCount++;
+        } catch (err) { console.error(err); }
+    }
+
+    document.getElementById('loading-screen').style.display = 'none';
+    if (successCount > 0) {
+        Swal.fire({ icon: 'success', title: 'Thành công', text: `Đã nhân bản ${successCount} ô đa giác.` })
+            .then(() => location.reload());
+    } else {
+        Swal.fire("Lỗi", "Không thể dán ô (có thể do chồng lấn ranh giới).", "error");
+    }
+};
+
+window.pasteAttributes = async function(text) {
+    // Logic paste thuộc tính cũ
+    if (window.selectedUnitsList.length === 0) {
+        return Swal.fire("Thông báo", "Vui lòng chọn các ô mục tiêu để dán thuộc tính.", "info");
+    }
+    const lines = text.split('\n');
+    const dataLine = lines.find(l => l.includes('Tên:'));
+    if (!dataLine) return;
+
+    const nameMatch = dataLine.match(/Tên: (.*?) \|/);
+    const custMatch = dataLine.match(/Khách: (\d+)/);
+    const orderMatch = dataLine.match(/Đơn: (\d+)/);
+    const colorMatch = dataLine.match(/Màu: (#\w+)/);
+
+    const newData = {
+        name: nameMatch ? nameMatch[1] : null,
+        customers: custMatch ? parseInt(custMatch[1]) : 0,
+        orders: orderMatch ? parseInt(orderMatch[1]) : 0,
+        color: colorMatch ? colorMatch[1] : null
+    };
+
+    const { isConfirmed } = await Swal.fire({
+        title: 'Dán thuộc tính?',
+        html: `Áp dụng thông tin đã copy cho <b>${window.selectedUnitsList.length}</b> ô đang chọn?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Dán ngay'
+    });
+
+    if (isConfirmed) {
         document.getElementById('loading-screen').style.display = 'flex';
         const updates = window.selectedUnitsList.map(id => ({
-            id,
-            name: newData.name,
-            customer_count: newData.customers,
-            order_count: newData.orders,
-            color: newData.color
+            id, name: newData.name, customer_count: newData.customers, order_count: newData.orders, color: newData.color
         }));
-
-        const res = await fetch('/api/units/bulk-attributes', {
+        await fetch('/api/units/bulk-attributes', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ updates })
         });
-        const data = await res.json();
         document.getElementById('loading-screen').style.display = 'none';
-
-        if (data.success) {
-            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Đã dán thuộc tính thành công!', timer: 2000, showConfirmButton: false })
-                .then(() => location.reload());
-        }
-    } catch (err) {
-        console.error("Paste error:", err);
+        location.reload();
     }
 };
 
@@ -170,12 +236,19 @@ window.initGenericPanel = function(panelId, handleId) {
 
     header.onmousedown = (e) => {
         if (e.target.closest("button")) return;
+        
+        // Ngăn chặn việc bôi đen chữ khi bắt đầu kéo
+        e.preventDefault();
+        
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
         const rect = panel.getBoundingClientRect();
         startLeft = rect.left;
         startTop = rect.top;
+
+        // Vô hiệu hóa chọn văn bản trên toàn trang
+        document.body.style.userSelect = 'none';
 
         const onMouseMove = (e) => {
             if (!isDragging) return;
@@ -187,6 +260,8 @@ window.initGenericPanel = function(panelId, handleId) {
 
         const onMouseUp = () => {
             isDragging = false;
+            // Khôi phục lại khả năng chọn văn bản
+            document.body.style.userSelect = '';
             document.removeEventListener("mousemove", onMouseMove);
             document.removeEventListener("mouseup", onMouseUp);
         };
@@ -357,9 +432,12 @@ window.copySelectedUnits = function () {
     window.geoJsonLayer.eachLayer(function (layer) {
         const uid = layer.options.id;
         if (!window.selectedUnitsList.includes(uid)) return;
-        // Lấy thông tin từ feature properties
         const f = layer.feature;
         if (!f || !f.properties) return;
+        
+        // Lưu geometry vào clipboard ảo
+        window._clipboardFeatures.push(JSON.parse(JSON.stringify(f)));
+
         const p = f.properties;
         const area = p.area ? p.area.toFixed(4) : '0';
         lines.push(`Tên: ${p.name || 'N/A'} | ID: ${uid} | Khách: ${p.customers || 0} | Đơn: ${p.orders || 0} | Diện tích: ${area} km² | Màu: ${p.color || '#ccc'}`);
@@ -367,7 +445,7 @@ window.copySelectedUnits = function () {
 
     const text = lines.join('\n');
     navigator.clipboard.writeText(text).then(() => {
-        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${window.selectedUnitsList.length} ô vào clipboard!`, timer: 2500, showConfirmButton: false });
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${window.selectedUnitsList.length} ô đa giác!`, timer: 2500, showConfirmButton: false });
     }).catch(() => {
         // Fallback
         const ta = document.createElement('textarea');
@@ -421,6 +499,11 @@ if (currentUser) {
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
     }).addTo(map);
+
+    // Theo dõi vị trí chuột để Paste
+    map.on('mousemove', (e) => {
+        window._lastMouseLatLng = e.latlng;
+    });
 
     // --- NGĂN CHẶN MAP NHẬN SỰ KIỆN KHI THAO TÁC TRÊN PANEL ---
     const stopPropagationElements = [

@@ -1,6 +1,6 @@
 // optimization/grasp_worker.js
-// Worker Thread chạy ngầm thuật toán GRASP
-// Được spawn bởi routes/optimization.js, KHÔNG bao giờ import trực tiếp
+// Worker Thread - Thuật toán BGRASP (Bi-objective GRASP)
+// Theo đúng paper: Construction → Filter ρ(S) → Relinked Local Search
 
 const { workerData, parentPort } = require("worker_threads");
 const pool = require("../db");
@@ -8,11 +8,9 @@ const pool = require("../db");
 function reportProgress(current, total, message = "") {
   parentPort.postMessage({ type: "progress", current, total, message });
 }
-
 function reportDone(result) {
   parentPort.postMessage({ type: "done", result });
 }
-
 function reportError(err) {
   parentPort.postMessage({
     type: "error",
@@ -20,8 +18,7 @@ function reportError(err) {
   });
 }
 
-// Công thức Haversine: Tính khoảng cách đường chim bay giữa
-// 2 điểm (Lat, Lng) trên mặt cầu
+// Haversine: khoảng cách (km) giữa 2 điểm trên mặt cầu
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -32,11 +29,9 @@ function haversine(lat1, lon1, lat2, lon2) {
       Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Random màu hex cho việc tô màu bản đồ sau khi phân vùng
 function hslToHex(h, s, l) {
   l /= 100;
   const a = (s * Math.min(l, 1 - l)) / 100;
@@ -50,10 +45,7 @@ function hslToHex(h, s, l) {
   return `#${f(0)}${f(8)}${f(4)}`;
 }
 
-// ================================================================
-//  HELPER: Kiểm tra tính liên thông (connected) của một tập ô
-//  Trả về true nếu tất cả các ô trong unitIds tạo thành 1 cụm liên thông
-// ================================================================
+// Kiểm tra tính liên thông của tập ô
 function isConnectedSubgraph(unitIds, adjList) {
   if (unitIds.length <= 1) return true;
   const idSet = new Set(unitIds);
@@ -62,19 +54,17 @@ function isConnectedSubgraph(unitIds, adjList) {
   visited.add(unitIds[0]);
   while (queue.length > 0) {
     const curr = queue.shift();
-    for (const neighbor of adjList[curr]) {
-      if (idSet.has(neighbor) && !visited.has(neighbor)) {
-        visited.add(neighbor);
-        queue.push(neighbor);
+    for (const nb of adjList[curr]) {
+      if (idSet.has(nb) && !visited.has(nb)) {
+        visited.add(nb);
+        queue.push(nb);
       }
     }
   }
   return visited.size === idSet.size;
 }
 
-// ================================================================
-//  HELPER: Tìm tất cả ô biên của một vùng (có ít nhất 1 neighbor chưa gán)
-// ================================================================
+// Tìm ô biên chưa gán của một vùng
 function getBorderCandidates(territoryUnits, adjList, assigned) {
   const candidates = new Set();
   for (const uid of territoryUnits) {
@@ -85,41 +75,44 @@ function getBorderCandidates(territoryUnits, adjList, assigned) {
   return Array.from(candidates);
 }
 
+// ================================================================
+//  THUẬT TOÁN BGRASP CHÍNH
+// ================================================================
 async function runGRASP(versionId, config) {
   const MAX_ITER = config.maxIterations || 200;
   const p = config.numRegions || 5;
-  const lambda = config.lambda !== undefined ? config.lambda : 0.5;
   const alpha = config.alpha || 0.05;
+  const TOP_K = Math.min(config.filterTop || 50, MAX_ITER);
+  const MAX_LS_MOVES = config.maxLocalSearchMoves || 500;
 
-  // Fetch units
+  // --- FETCH DATA ---
   let unitsRes;
   if (config.selectedIds && config.selectedIds.length > 0) {
     const ids = config.selectedIds.join(",");
     unitsRes = await pool.query(
       `SELECT id, customer_count, order_count, area_km2,
-                    ST_X(centroid) as cx, ST_Y(centroid) as cy
-             FROM basic_units
-             WHERE version_id = $1 AND geom IS NOT NULL AND id IN (${ids})`,
+              ST_X(centroid) as cx, ST_Y(centroid) as cy
+       FROM basic_units
+       WHERE version_id = $1 AND geom IS NOT NULL AND id IN (${ids})`,
       [versionId],
     );
   } else {
     unitsRes = await pool.query(
       `SELECT id, customer_count, order_count, area_km2,
-                    ST_X(centroid) as cx, ST_Y(centroid) as cy
-             FROM basic_units
-             WHERE version_id = $1 AND geom IS NOT NULL`,
+              ST_X(centroid) as cx, ST_Y(centroid) as cy
+       FROM basic_units
+       WHERE version_id = $1 AND geom IS NOT NULL`,
       [versionId],
     );
   }
   const units = unitsRes.rows;
-
   if (units.length < p) {
     throw new Error(
       `Số lượng ô (${units.length}) ít hơn số vùng cần chia (${p})!`,
     );
   }
 
-  // Lấy dữ liệu ô nào chạm cạnh ô nào
+  // --- ADJACENCY ---
   const adjacencyRes = await pool.query(
     `SELECT unit_a_id, unit_b_id FROM unit_adjacencies WHERE version_id = $1`,
     [versionId],
@@ -133,17 +126,17 @@ async function runGRASP(versionId, config) {
     }
   });
 
-  // Kiểm tra tính liên kết
+  // Kiểm tra liên thông đầu vào
   if (config.selectedIds && config.selectedIds.length > 0 && units.length > 0) {
     let visited = new Set();
     let queue = [units[0].id];
     visited.add(units[0].id);
     while (queue.length > 0) {
       let curr = queue.shift();
-      for (let neighbor of adjList[curr]) {
-        if (!visited.has(neighbor)) {
-          visited.add(neighbor);
-          queue.push(neighbor);
+      for (let nb of adjList[curr]) {
+        if (!visited.has(nb)) {
+          visited.add(nb);
+          queue.push(nb);
         }
       }
     }
@@ -156,13 +149,12 @@ async function runGRASP(versionId, config) {
 
   reportProgress(0, MAX_ITER, `Bắt đầu BGRASP: ${units.length} ô, ${p} vùng`);
 
-  // Tính toán các hằng số mục tiêu
+  // --- PRE-COMPUTE ---
   const unitMap = {};
   units.forEach((u) => (unitMap[u.id] = u));
 
-  // Pre-calculate distances
-  const distMap = {}; // ma trận khoảng cách giữa các đa giác (id1_id2 -> distance)
-  let maxDist = 0;
+  const distMap = {};
+  let globalMaxDist = 0;
   let totalCustomers = 0;
   units.forEach((u1) => {
     totalCustomers += u1.customer_count || 0;
@@ -171,144 +163,112 @@ async function runGRASP(versionId, config) {
         const d = haversine(u1.cy, u1.cx, u2.cy, u2.cx);
         distMap[`${u1.id}_${u2.id}`] = d;
         distMap[`${u2.id}_${u1.id}`] = d;
-        if (d > maxDist) maxDist = d;
+        if (d > globalMaxDist) globalMaxDist = d;
       }
     });
     distMap[`${u1.id}_${u1.id}`] = 0;
   });
 
-  const mu1 = totalCustomers / p; // Số lượng khách hàng lý tưởng
-  const d_max = ((units.length - p) / p) * maxDist;
+  const mu1 = totalCustomers / p;
+  // d_max theo paper: ((|V| - p) / p) * max{d_ij}
+  const d_max = ((units.length - p) / p) * globalMaxDist;
 
-  // Helper func
   const getDist = (id1, id2) => distMap[`${id1}_${id2}`] || 0;
-
   const getDistToCenter = (uid, center) => {
     return haversine(unitMap[uid].cy, unitMap[uid].cx, center.cy, center.cx);
   };
 
-  const updateCenter = (t) => {
-    if (t.units.length === 0) return;
-    let sumY = 0,
-      sumX = 0;
-    for (const id of t.units) {
-      sumY += unitMap[id].cy;
-      sumX += unitMap[id].cx;
+  // computeCenter theo paper: c(t) = argmin_{j∈V_t} Σ_{i∈V_t} d_ij
+  // Center = MEDOID (node thực sự có tổng khoảng cách nhỏ nhất đến các node khác)
+  // Khác với trung bình cộng tọa độ vì medoid luôn nằm trên 1 ô thực tế → compact hơn
+  const computeCenter = (unitIds) => {
+    if (unitIds.length === 0) return { cy: 0, cx: 0 };
+    if (unitIds.length === 1) {
+      return { cy: unitMap[unitIds[0]].cy, cx: unitMap[unitIds[0]].cx };
     }
-    t.center = {
-      cy: sumY / t.units.length,
-      cx: sumX / t.units.length,
-    };
-  };
-
-  const calcPhi = (unitsArray, customers) => {
-    if (unitsArray.length === 0) return Infinity;
-    let sumY = 0,
-      sumX = 0;
-    for (const id of unitsArray) {
-      sumY += unitMap[id].cy;
-      sumX += unitMap[id].cx;
-    }
-    let cy = sumY / unitsArray.length;
-    let cx = sumX / unitsArray.length;
-
-    let sumDist = 0;
-    for (const id of unitsArray) {
-      sumDist += haversine(unitMap[id].cy, unitMap[id].cx, cy, cx);
-    }
-    let f_disp = maxDist > 0 ? sumDist / maxDist : 0;
-    let f_dev = mu1 > 0 ? Math.abs(mu1 - customers) / mu1 : 0;
-    return lambda * f_disp + (1 - lambda) * f_dev;
-  };
-
-  // Tạo lookup nhanh: unitId -> territoryIndex
-  function buildAssignmentMap(territories) {
-    const map = {};
-    for (let i = 0; i < territories.length; i++) {
-      for (const uid of territories[i].units) {
-        map[uid] = i;
+    let bestId = unitIds[0];
+    let bestSum = Infinity;
+    for (const j of unitIds) {
+      let sumD = 0;
+      for (const i of unitIds) {
+        if (i !== j) sumD += getDist(j, i);
+      }
+      if (sumD < bestSum) {
+        bestSum = sumD;
+        bestId = j;
       }
     }
-    return map;
-  }
+    return { cy: unitMap[bestId].cy, cx: unitMap[bestId].cx };
+  };
 
-  let bestSolution = null;
-  let bestRho = Infinity;
+  // Tập λ để quét không gian mục tiêu theo paper
+  const lambdaSet = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 
-  for (let iter = 1; iter <= MAX_ITER; iter++) {
-    // --- PHASE 1: CONSTRUCTION ---
-    // 1. Chọn seeds với randomization (BGRASP)
+  // ================================================================
+  //  PHA 1: CONSTRUCTION - Tạo MAX_ITER giải pháp
+  // ================================================================
+  const allSolutions = [];
+
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    const lambda = lambdaSet[iter % lambdaSet.length];
+
+    // 1a. Chọn seeds (ngẫu nhiên từ top-degree, rải đều)
     let sortedByDegree = [...units].sort(
       (a, b) => adjList[b.id].size - adjList[a.id].size,
     );
-    // Chọn seed đầu tiên ngẫu nhiên từ top-degree candidates
     let topK = Math.max(1, Math.floor(sortedByDegree.length * 0.15));
     let firstSeed = sortedByDegree[Math.floor(Math.random() * topK)];
 
-    let seeds = [];
-    let assigned = new Set();
+    let seeds = [firstSeed.id];
+    let assigned = new Set([firstSeed.id]);
 
-    seeds.push(firstSeed.id);
-    assigned.add(firstSeed.id);
-
-    // chọn p - 1 seeds còn lại: greedy-random (xa các seeds đã chọn)
     for (let i = 1; i < p; i++) {
-      let scoredCandidates = [];
+      let scored = [];
       for (const u of units) {
         if (assigned.has(u.id)) continue;
-        let minDistToSeed = Infinity;
+        let minD = Infinity;
         for (const sid of seeds) {
           let d = getDist(u.id, sid);
-          if (d < minDistToSeed) minDistToSeed = d;
+          if (d < minD) minD = d;
         }
-        scoredCandidates.push({ id: u.id, dist: minDistToSeed });
+        scored.push({ id: u.id, dist: minD });
       }
-      scoredCandidates.sort((a, b) => b.dist - a.dist);
-      // Chọn ngẫu nhiên từ top 20% xa nhất
-      let topN = Math.max(1, Math.floor(scoredCandidates.length * 0.2));
-      let chosen = scoredCandidates[Math.floor(Math.random() * topN)];
-      seeds.push(chosen.id);
-      assigned.add(chosen.id);
+      scored.sort((a, b) => b.dist - a.dist);
+      let topN = Math.max(1, Math.floor(scored.length * 0.2));
+      let pick = scored[Math.floor(Math.random() * topN)];
+      seeds.push(pick.id);
+      assigned.add(pick.id);
     }
 
-    // Initialize territories
-    let territories = seeds.map((sid) => {
-      let u = unitMap[sid];
-      return {
-        units: [sid],
-        customers: u.customer_count || 0,
-        center: { cy: u.cy, cx: u.cx },
-      };
-    });
+    // 1b. Khởi tạo territories
+    let territories = seeds.map((sid) => ({
+      units: [sid],
+      customers: unitMap[sid].customer_count || 0,
+      center: { cy: unitMap[sid].cy, cx: unitMap[sid].cx },
+    }));
 
-    // 2. Gán các ô còn lại - Round-robin growth (vùng ít ô nhất mở rộng trước)
-    let stuckCount = 0;
+    // 1c. Gán ô còn lại - Round-robin (vùng ít ô nhất mở rộng trước)
     while (assigned.size < units.length) {
-      // Tìm tất cả các vùng có thể mở rộng (có neighbor chưa gán)
       let expandable = [];
       for (let i = 0; i < p; i++) {
-        const candidates = getBorderCandidates(
+        const cands = getBorderCandidates(
           territories[i].units,
           adjList,
           assigned,
         );
-        if (candidates.length > 0) {
-          expandable.push({ idx: i, candidates });
-        }
+        if (cands.length > 0) expandable.push({ idx: i, candidates: cands });
       }
 
       if (expandable.length === 0) {
-        // Orphan handling (giữ nguyên logic BFS)
+        // Xử lý ô cô lập bằng BFS
         let unassignedIds = units
           .filter((u) => !assigned.has(u.id))
           .map((u) => u.id);
-
         for (const orphanId of unassignedIds) {
           let bfsVisited = new Set([orphanId]);
           let bfsQueue = [orphanId];
-          let foundTerritory = -1;
-
-          while (bfsQueue.length > 0 && foundTerritory === -1) {
+          let foundT = -1;
+          while (bfsQueue.length > 0 && foundT === -1) {
             let curr = bfsQueue.shift();
             for (const nb of adjList[curr]) {
               if (!bfsVisited.has(nb)) {
@@ -316,7 +276,7 @@ async function runGRASP(versionId, config) {
                 if (assigned.has(nb)) {
                   for (let ti = 0; ti < p; ti++) {
                     if (territories[ti].units.includes(nb)) {
-                      foundTerritory = ti;
+                      foundT = ti;
                       break;
                     }
                   }
@@ -326,159 +286,129 @@ async function runGRASP(versionId, config) {
               }
             }
           }
-
-          if (foundTerritory === -1) {
+          if (foundT === -1) {
             let minD = Infinity;
             for (let ti = 0; ti < p; ti++) {
               let d = getDistToCenter(orphanId, territories[ti].center);
               if (d < minD) {
                 minD = d;
-                foundTerritory = ti;
+                foundT = ti;
               }
             }
           }
-
-          territories[foundTerritory].units.push(orphanId);
-          territories[foundTerritory].customers +=
+          territories[foundT].units.push(orphanId);
+          territories[foundT].customers +=
             unitMap[orphanId].customer_count || 0;
-          updateCenter(territories[foundTerritory]);
+          territories[foundT].center = computeCenter(territories[foundT].units);
           assigned.add(orphanId);
         }
         break;
       }
 
-      // Round-robin: chọn vùng có ÍT Ô NHẤT (không phải ít khách nhất)
-      // Điều này đảm bảo các vùng phát triển đều đặn, tránh 1 vùng bò dài
-      let tIdx = -1;
-      let minUnits = Infinity;
-      let bestNt = [];
+      // Đánh giá TẤT CẢ các ứng viên từ TẤT CẢ các vùng (Global RCL)
+      let phiVals = [];
+      let phiMin = Infinity,
+        phiMax = -Infinity;
+
       for (const { idx, candidates } of expandable) {
-        if (territories[idx].units.length < minUnits) {
-          minUnits = territories[idx].units.length;
-          tIdx = idx;
-          bestNt = candidates;
+        let t = territories[idx];
+        for (const j of candidates) {
+          let u = unitMap[j];
+          // Tính center mới (medoid) cho V_t* ∪ {j}
+          let newUnits = [...t.units, j];
+          let hypCenter = computeCenter(newUnits);
+
+          // f_disp(j,t*) = (1/d_max) * Σ d_i(c_t*) cho i ∈ V_t* ∪ {j}
+          let sumDist = 0;
+          for (const i of newUnits) sumDist += getDistToCenter(i, hypCenter);
+          let f_disp = d_max > 0 ? sumDist / d_max : 0;
+
+          // f_dev(j,t*) = (1/μ) * |w(V_t* ∪ {j}) - μ|
+          let newCust = t.customers + (u.customer_count || 0);
+          let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
+
+          let phi = lambda * f_disp + (1 - lambda) * f_dev;
+          phiVals.push({ id: j, tIdx: idx, phi });
+          if (phi < phiMin) phiMin = phi;
+          if (phi > phiMax) phiMax = phi;
         }
       }
 
-      let t = territories[tIdx];
-
-      // Tính phi(j, t*) theo đúng paper BGRASP
-      let phiVals = [];
-      let phiMin = Infinity;
-      let phiMax = -Infinity;
-
-      for (const j of bestNt) {
-        let u = unitMap[j];
-        // Tính tâm ảo nếu thêm ô j vào vùng t
-        let newCy =
-          (t.center.cy * t.units.length + u.cy) / (t.units.length + 1);
-        let newCx =
-          (t.center.cx * t.units.length + u.cx) / (t.units.length + 1);
-        let hypCenter = { cy: newCy, cx: newCx };
-
-        // f_disp theo paper: (1/d_max) * Σ d_i(c_t)
-        // Sum of distances (KHÔNG phải MSE) từ tất cả ô đến tâm mới
-        let sumDist = getDistToCenter(j, hypCenter);
-        for (const i of t.units) sumDist += getDistToCenter(i, hypCenter);
-        let f_disp = maxDist > 0 ? sumDist / maxDist : 0;
-
-        // f_dev theo paper: (1/μ) * |w(V_t ∪ {j}) - μ|
-        let newCust = t.customers + (u.customer_count || 0);
-        let f_dev = mu1 > 0 ? Math.abs(mu1 - newCust) / mu1 : 0;
-
-        // phi(j, t*) = λ * f_disp + (1-λ) * f_dev
-        let phi = lambda * f_disp + (1 - lambda) * f_dev;
-
-        phiVals.push({ id: j, phi, hypCenter });
-        if (phi < phiMin) phiMin = phi;
-        if (phi > phiMax) phiMax = phi;
-      }
-
-      // Tạo RCL : chọn các ô có phi <= phiMin + alpha * (phiMax - phiMin)
+      // RCL: {j : φ(j) ∈ [φ_min, φ_min + α(φ_max - φ_min)]}
       let threshold = phiMin + alpha * (phiMax - phiMin);
-      let rcl = phiVals.filter((item) => item.phi <= threshold);
+      let rcl = phiVals.filter((v) => v.phi <= threshold);
+      if (rcl.length === 0) rcl = phiVals;
       let chosen = rcl[Math.floor(Math.random() * rcl.length)];
 
-      t.units.push(chosen.id);
-      t.customers += unitMap[chosen.id].customer_count || 0;
-      t.center = chosen.hypCenter;
+      let targetT = territories[chosen.tIdx];
+      targetT.units.push(chosen.id);
+      targetT.customers += unitMap[chosen.id].customer_count || 0;
+      targetT.center = computeCenter(targetT.units);
       assigned.add(chosen.id);
     }
 
-    // --- POST-CONSTRUCTION: Sửa chữa tính liên thông ---
-    // Kiểm tra mỗi vùng có liên thông không, nếu không thì chuyển các mảnh rời
-    // sang vùng liền kề phù hợp nhất
+    // 1d. Sửa chữa tính liên thông
     for (let repair = 0; repair < 5; repair++) {
       let hadRepair = false;
       for (let i = 0; i < p; i++) {
         const t = territories[i];
         if (t.units.length <= 1) continue;
-
-        // Tìm các thành phần liên thông trong vùng
+        const unitSet = new Set(t.units);
         const components = [];
         const visited = new Set();
         for (const startId of t.units) {
           if (visited.has(startId)) continue;
-          const component = [];
+          const comp = [];
           const q = [startId];
           visited.add(startId);
           while (q.length > 0) {
             const curr = q.shift();
-            component.push(curr);
+            comp.push(curr);
             for (const nb of adjList[curr]) {
-              if (!visited.has(nb) && t.units.includes(nb)) {
+              if (!visited.has(nb) && unitSet.has(nb)) {
                 visited.add(nb);
                 q.push(nb);
               }
             }
           }
-          components.push(component);
+          components.push(comp);
         }
-
-        if (components.length <= 1) continue; // Đã liên thông
-
-        // Giữ thành phần lớn nhất, chuyển các mảnh nhỏ sang vùng khác
+        if (components.length <= 1) continue;
         components.sort((a, b) => b.length - a.length);
-        const mainComponent = new Set(components[0]);
-
+        const mainComp = new Set(components[0]);
         for (let ci = 1; ci < components.length; ci++) {
           for (const orphanId of components[ci]) {
-            // Tìm vùng liền kề tốt nhất cho orphan
-            let bestTarget = -1;
-            let bestDevImprovement = -Infinity;
-
+            let bestTarget = -1,
+              bestImprove = -Infinity;
             for (const nb of adjList[orphanId]) {
+              if (mainComp.has(nb)) {
+                bestTarget = i;
+                break;
+              }
               for (let j = 0; j < p; j++) {
-                if (j === i && mainComponent.has(nb)) {
-                  bestTarget = i; // Có thể nối lại vào main component
-                  break;
-                }
                 if (j !== i && territories[j].units.includes(nb)) {
-                  // Tính xem chuyển sang j có tốt không
-                  const uCust = unitMap[orphanId].customer_count || 0;
-                  const oldDev = Math.abs(territories[j].customers - mu1);
-                  const newDev = Math.abs(
-                    territories[j].customers + uCust - mu1,
-                  );
-                  const improvement = oldDev - newDev;
-                  if (improvement > bestDevImprovement) {
-                    bestDevImprovement = improvement;
+                  const uC = unitMap[orphanId].customer_count || 0;
+                  const improve =
+                    Math.abs(territories[j].customers - mu1) -
+                    Math.abs(territories[j].customers + uC - mu1);
+                  if (improve > bestImprove) {
+                    bestImprove = improve;
                     bestTarget = j;
                   }
                 }
               }
-              if (bestTarget === i) break; // Nối lại main component
+              if (bestTarget === i) break;
             }
-
             if (bestTarget >= 0 && bestTarget !== i) {
-              // Chuyển orphan sang vùng khác
               t.units = t.units.filter((id) => id !== orphanId);
               t.customers -= unitMap[orphanId].customer_count || 0;
-              updateCenter(t);
+              t.center = computeCenter(t.units);
               territories[bestTarget].units.push(orphanId);
               territories[bestTarget].customers +=
                 unitMap[orphanId].customer_count || 0;
-              updateCenter(territories[bestTarget]);
+              territories[bestTarget].center = computeCenter(
+                territories[bestTarget].units,
+              );
               hadRepair = true;
             }
           }
@@ -487,154 +417,209 @@ async function runGRASP(versionId, config) {
       if (!hadRepair) break;
     }
 
-    // --- EVALUATE SOLUTION ---
-    let totalFDisp = 0;
-    let totalFDev = 0;
+    // 1e. Tính ρ(S) theo paper để đánh giá solution
+    // ρ(S) = 2·f_disp(S) / ((|V|-p)·d_max) + f_Tdev / p
+    let fDispS = 0; // f_disp(S) = Σ_t Σ_j d_j(c_t)
+    let fTdev = 0; // f_Tdev = Σ_t (1/μ) * |w(V_t) - μ|
     for (let i = 0; i < p; i++) {
-      let t = territories[i];
-      for (const uid of t.units) {
-        totalFDisp += getDistToCenter(uid, t.center);
-      }
-      totalFDev += mu1 > 0 ? (1 / mu1) * Math.abs(t.customers - mu1) : 0;
+      const t = territories[i];
+      t.center = computeCenter(t.units);
+      for (const uid of t.units) fDispS += getDistToCenter(uid, t.center);
+      fTdev += mu1 > 0 ? Math.abs(t.customers - mu1) / mu1 : 0;
     }
-
     let rho =
-      (units.length - p) * d_max > 0
-        ? (2 * totalFDisp) / ((units.length - p) * d_max) + totalFDev / p
+      globalMaxDist > 0 && units.length > p
+        ? (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p
         : Infinity;
 
-    if (rho < bestRho) {
-      bestRho = rho;
-      bestSolution = JSON.parse(JSON.stringify(territories)); // deep copy
-    }
+    allSolutions.push({
+      territories: JSON.parse(JSON.stringify(territories)),
+      rho,
+      lambda,
+      fDispS,
+      fTdev,
+    });
 
-    reportProgress(
-      iter,
-      MAX_ITER,
-      `Vòng lặp ${iter}/${MAX_ITER} (Rho tốt nhất: ${bestRho.toFixed(4)})`,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 5)); // Yield to event loop
+    if (iter % 10 === 0 || iter === MAX_ITER - 1) {
+      reportProgress(
+        iter + 1,
+        MAX_ITER,
+        `Construction ${iter + 1}/${MAX_ITER} (λ=${lambda.toFixed(1)}, ρ=${rho.toFixed(4)})`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2));
   }
 
-  // --- PHASE 2: Tìm kiếm cục bộ (Relinked Local Search) ---
-  reportProgress(MAX_ITER, MAX_ITER, `Bắt đầu Local Search...`);
+  // ================================================================
+  //  PHA 2: LỌC - Chọn TOP_K giải pháp tốt nhất bằng ρ(S)
+  // ================================================================
+  allSolutions.sort((a, b) => a.rho - b.rho);
+  const filtered = allSolutions.slice(0, TOP_K);
+  reportProgress(
+    MAX_ITER,
+    MAX_ITER,
+    `Đã lọc ${filtered.length} giải pháp tốt nhất (ρ tốt nhất: ${filtered[0].rho.toFixed(4)})`,
+  );
 
-  let improved = true;
-  let lsMoves = 0;
-  // Tạo lookup nhanh: unitId -> territoryIndex
-  let assignMap = buildAssignmentMap(bestSolution);
+  // ================================================================
+  //  PHA 3: RELINKED LOCAL SEARCH trên các giải pháp đã lọc
+  //  Theo paper: N(S) = {(i,j) ∈ E : q(i) ≠ q(j)}
+  //  Move operator: move(i,j) chuyển node i từ q(i) sang q(j)
+  //  Tối ưu lần lượt z1 → z2 → z1 → z2 (relinked)
+  // ================================================================
+  let bestSolution = filtered[0].territories;
+  let bestRho = filtered[0].rho;
+  let totalLsMoves = 0;
 
-  {
-    improved = false;
-    // Relinked Local Search: cycle giữa z1 (dispersion) và z2 (balance)
-    let currentObjective = 0; // 0 = z1, 1 = z2
+  for (let si = 0; si < filtered.length; si++) {
+    let sol = JSON.parse(JSON.stringify(filtered[si].territories));
+    // assignMap: q(i) - territory chứa node i
+    let assignMap = {};
+    for (let i = 0; i < p; i++) {
+      for (const uid of sol[i].units) assignMap[uid] = i;
+    }
+
+    // Cập nhật center (medoid)
+    for (let i = 0; i < p; i++) sol[i].center = computeCenter(sol[i].units);
+
+    // Xây dựng tập lân cận N(S): các cạnh biên giữa 2 territory khác nhau
+    // N(S) = {(i,j) ∈ E : q(i) ≠ q(j)}
+    const buildBorderEdges = () => {
+      const edges = [];
+      for (const u of units) {
+        const qi = assignMap[u.id];
+        if (qi === undefined) continue;
+        for (const adjId of adjList[u.id]) {
+          const qj = assignMap[adjId];
+          if (qj !== undefined && qi !== qj) {
+            edges.push({ nodeId: u.id, fromT: qi, toT: qj });
+          }
+        }
+      }
+      return edges;
+    };
+
+    let lsMoves = 0;
+    let currentObj = 0; // 0=z1(dispersion), 1=z2(balance)
     let noImproveCycles = 0;
 
-    while (lsMoves < 500 && noImproveCycles < 4) {
-      improved = false;
-      for (let i = 0; i < p; i++) {
-        let t = bestSolution[i];
-        for (let k = 0; k < t.units.length; k++) {
-          let uid = t.units[k];
-
-          // Tìm các vùng liền kề mà uid có thể chuyển sang (dùng assignMap)
-          let neighborTerritories = new Set();
-          for (const adjId of adjList[uid]) {
-            const tj = assignMap[adjId];
-            if (tj !== undefined && tj !== i) {
-              neighborTerritories.add(tj);
-            }
-          }
-
-          if (neighborTerritories.size > 0 && t.units.length > 1) {
-            for (const j of neighborTerritories) {
-              let t2 = bestSolution[j];
-
-              let uCust = unitMap[uid].customer_count || 0;
-              let t1NewUnits = t.units.filter((id) => id !== uid);
-              let t2NewUnits = [...t2.units, uid];
-              let t1NewCust = t.customers - uCust;
-              let t2NewCust = t2.customers + uCust;
-
-              let shouldMove = false;
-
-              if (currentObjective === 0) {
-                // z1: Tối ưu dispersion (compact) - tổng khoảng cách đến tâm phải giảm
-                let oldZ1 = 0, newZ1 = 0;
-                let oldCenter1 = t.center, oldCenter2 = t2.center;
-                for (const id of t.units) oldZ1 += getDistToCenter(id, oldCenter1);
-                for (const id of t2.units) oldZ1 += getDistToCenter(id, oldCenter2);
-
-                // Tính tâm mới
-                let nc1 = { cy: 0, cx: 0 }, nc2 = { cy: 0, cx: 0 };
-                for (const id of t1NewUnits) { nc1.cy += unitMap[id].cy; nc1.cx += unitMap[id].cx; }
-                if (t1NewUnits.length > 0) { nc1.cy /= t1NewUnits.length; nc1.cx /= t1NewUnits.length; }
-                for (const id of t2NewUnits) { nc2.cy += unitMap[id].cy; nc2.cx += unitMap[id].cx; }
-                nc2.cy /= t2NewUnits.length; nc2.cx /= t2NewUnits.length;
-
-                for (const id of t1NewUnits) newZ1 += getDistToCenter(id, nc1);
-                for (const id of t2NewUnits) newZ1 += getDistToCenter(id, nc2);
-
-                shouldMove = newZ1 < oldZ1 * 0.995; // Cải thiện ít nhất 0.5%
-              } else {
-                // z2: Tối ưu balance - tổng deviation phải giảm
-                let oldDev = Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
-                let newDev = Math.abs(t1NewCust - mu1) + Math.abs(t2NewCust - mu1);
-                shouldMove = newDev < oldDev * 0.99;
-              }
-
-              if (shouldMove) {
-                // Kiểm tra vùng nguồn vẫn liên thông (dùng Set thay Array.includes)
-                let isSourceConnected = true;
-                if (t.units.length > 2) {
-                  let remainSet = new Set(t1NewUnits);
-                  let visited = new Set();
-                  let q = [t1NewUnits[0]];
-                  visited.add(t1NewUnits[0]);
-                  while (q.length > 0) {
-                    let curr = q.shift();
-                    for (let n of adjList[curr]) {
-                      if (remainSet.has(n) && !visited.has(n)) {
-                        visited.add(n);
-                        q.push(n);
-                      }
-                    }
-                  }
-                  if (visited.size !== t1NewUnits.length)
-                    isSourceConnected = false;
-                }
-
-                if (isSourceConnected) {
-                  t.units.splice(k, 1);
-                  t.customers -= uCust;
-                  t2.units.push(uid);
-                  t2.customers += uCust;
-
-                  updateCenter(t);
-                  updateCenter(t2);
-
-                  assignMap[uid] = j;
-                  improved = true;
-                  lsMoves++;
-                  break;
-                }
-              }
-            }
-          }
-          if (improved) break;
-        }
-        if (improved) break;
+    while (lsMoves < MAX_LS_MOVES && noImproveCycles < 4) {
+      let improved = false;
+      // Lấy tất cả cạnh biên N(S)
+      const borderEdges = buildBorderEdges();
+      // Shuffle để tránh bias
+      for (let x = borderEdges.length - 1; x > 0; x--) {
+        const y = Math.floor(Math.random() * (x + 1));
+        [borderEdges[x], borderEdges[y]] = [borderEdges[y], borderEdges[x]];
       }
+
+      for (const edge of borderEdges) {
+        const { nodeId: uid, fromT: i, toT: j } = edge;
+        let t = sol[i];
+        let t2 = sol[j];
+        if (t.units.length <= 1) continue;
+
+        let uCust = unitMap[uid].customer_count || 0;
+        let t1New = t.units.filter((id) => id !== uid);
+        let t2New = [...t2.units, uid];
+
+        let shouldMove = false;
+
+        if (currentObj === 0) {
+          // z1: Σ d_j(c_t) cho 2 vùng liên quan phải giảm
+          let oldZ1 = 0,
+            newZ1 = 0;
+          for (const id of t.units) oldZ1 += getDistToCenter(id, t.center);
+          for (const id of t2.units) oldZ1 += getDistToCenter(id, t2.center);
+          let nc1 = computeCenter(t1New);
+          let nc2 = computeCenter(t2New);
+          for (const id of t1New) newZ1 += getDistToCenter(id, nc1);
+          for (const id of t2New) newZ1 += getDistToCenter(id, nc2);
+          shouldMove = newZ1 < oldZ1;
+        } else {
+          // z2: (1/μ) * max_t |w(V_t) - μ| phải giảm
+          let oldDev =
+            Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
+          let newDev =
+            Math.abs(t.customers - uCust - mu1) +
+            Math.abs(t2.customers + uCust - mu1);
+          shouldMove = newDev < oldDev;
+        }
+
+        if (!shouldMove) continue;
+
+        // Connectivity check: Sau khi bỏ uid, territory nguồn vẫn liên thông?
+        let connected = true;
+        if (t.units.length > 2) {
+          let remainSet = new Set(t1New);
+          let vis = new Set([t1New[0]]);
+          let q = [t1New[0]];
+          while (q.length > 0) {
+            let c = q.shift();
+            for (let n of adjList[c]) {
+              if (remainSet.has(n) && !vis.has(n)) {
+                vis.add(n);
+                q.push(n);
+              }
+            }
+          }
+          connected = vis.size === t1New.length;
+        }
+        if (!connected) continue;
+
+        // Thực hiện move(uid, i→j)
+        const k = t.units.indexOf(uid);
+        t.units.splice(k, 1);
+        t.customers -= uCust;
+        t2.units.push(uid);
+        t2.customers += uCust;
+        // Cập nhật center (medoid) sau move
+        t.center = computeCenter(t.units);
+        t2.center = computeCenter(t2.units);
+        // Cập nhật assignMap: q(uid) = j
+        assignMap[uid] = j;
+        lsMoves++;
+        improved = true;
+        break; // first-improvement → restart scan
+      }
+
       if (!improved) {
         noImproveCycles++;
-        currentObjective = (currentObjective + 1) % 2; // Chuyển objective
+        currentObj = (currentObj + 1) % 2; // Chuyển objective (relinked)
       } else {
         noImproveCycles = 0;
       }
     }
+
+    totalLsMoves += lsMoves;
+
+    // Đánh giá lại ρ(S) sau Local Search
+    let fDispS = 0,
+      fTdev = 0;
+    for (let i = 0; i < p; i++) {
+      sol[i].center = computeCenter(sol[i].units);
+      for (const uid of sol[i].units)
+        fDispS += getDistToCenter(uid, sol[i].center);
+      fTdev += mu1 > 0 ? Math.abs(sol[i].customers - mu1) / mu1 : 0;
+    }
+    let rho = (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p;
+
+    if (rho < bestRho) {
+      bestRho = rho;
+      bestSolution = sol;
+    }
+
+    if (si % 5 === 0) {
+      reportProgress(
+        MAX_ITER,
+        MAX_ITER,
+        `Local Search ${si + 1}/${filtered.length} (ρ=${bestRho.toFixed(4)}, moves: ${lsMoves})`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 2));
   }
 
-  // --- FINAL VALIDATION: Đảm bảo mỗi vùng liên thông ---
+  // --- FINAL VALIDATION ---
   let contiguityOk = true;
   for (let i = 0; i < p; i++) {
     if (!isConnectedSubgraph(bestSolution[i].units, adjList)) {
@@ -651,7 +636,6 @@ async function runGRASP(versionId, config) {
   try {
     await client.query("BEGIN");
     for (let i = 0; i < p; i++) {
-      // Đảm bảo các vùng có màu sắc khác biệt rõ rệt bằng cách chia đều dải màu (Hue)
       const hue = (i * 360) / p;
       const color = hslToHex(hue, 75, 55);
       let t = bestSolution[i];
@@ -662,7 +646,7 @@ async function runGRASP(versionId, config) {
       });
 
       summary.push({
-        color: color,
+        color,
         polygonCount: t.units.length,
         customerCount: t.customers,
         orderCount: totalOrders,
@@ -686,13 +670,14 @@ async function runGRASP(versionId, config) {
 
   return {
     iterations: MAX_ITER,
-    bestRho: bestRho,
-    localSearchMoves: lsMoves,
+    filteredSolutions: filtered.length,
+    bestRho,
+    localSearchMoves: totalLsMoves,
     contiguityVerified: contiguityOk,
-    summary: summary, // Added summary data
+    summary,
     message: contiguityOk
-      ? "Hoàn tất phân chia vùng BGRASP. Tất cả các vùng đều liên thông."
-      : "Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông.",
+      ? "Hoàn tất BGRASP. Tất cả các vùng đều liên thông."
+      : "Hoàn tất BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông.",
   };
 }
 

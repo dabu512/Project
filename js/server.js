@@ -1,23 +1,30 @@
 const express = require("express");
 const cors = require("cors");
-const authRoutes = require("./routes/auth");
-const hierarchyRoutes = require("./routes/hierarchy");
-const unitRoutes = require("./routes/units");
-const driverRoutes = require("./routes/driver");
-const optimizationRoutes = require("./routes/optimization");
+const authRoutes = require("../routes/auth");
+const hierarchyRoutes = require("../routes/hierarchy");
+const unitRoutes = require("../routes/units");
+const driverRoutes = require("../routes/driver");
+const optimizationRoutes = require("../routes/optimization");
 
+const path = require("path");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "../public")));
+
+// Route mặc định để phục vụ file index.html
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
 
 // Kết nối các Route với tiền tố /api
 app.use("/api", authRoutes);
 app.use("/api/hierarchy", hierarchyRoutes);
 
 // Guard: Ngăn chỉnh sửa khi version đang bị khoá tối ưu hóa
-const checkVersionLock = optimizationRoutes.checkVersionLock || ((req, res, next) => next());
-app.use("/api/units",    checkVersionLock, unitRoutes);
+const checkVersionLock =
+  optimizationRoutes.checkVersionLock || ((req, res, next) => next());
+app.use("/api/units", checkVersionLock, unitRoutes);
 app.use("/api/driver", driverRoutes);
 app.use("/api/optimization", optimizationRoutes);
 

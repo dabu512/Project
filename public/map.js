@@ -48,15 +48,193 @@ window.setCursorMode = function (mode) {
     document.getElementById('btn-mode-pan').classList.toggle('active', mode === 'pan');
     document.getElementById('btn-mode-select').classList.toggle('active', mode === 'select');
 
+    const bulkPanel = document.getElementById('bulk-action-panel');
+
     if (typeof map !== 'undefined') {
         if (mode === 'select') {
             map.dragging.disable();
             map.getContainer().style.cursor = 'crosshair';
+            // Hiện panel quản lý chọn khi vào chế độ chọn
+            if (bulkPanel) {
+                bulkPanel.style.display = 'flex';
+                if (!window.bulkPanelInitialized) {
+                    window.initGenericPanel('bulk-action-panel', 'bulk-panel-drag-handle');
+                    window.bulkPanelInitialized = true;
+                }
+            }
         } else {
             map.dragging.enable();
             map.getContainer().style.cursor = '';
+            // Ẩn panel nếu không có gì được chọn
+            if (bulkPanel && (!window.selectedUnitsList || window.selectedUnitsList.length === 0)) {
+                bulkPanel.style.display = 'none';
+            }
         }
     }
+};
+
+// ================================================================
+//  PHÍM TẮT & PASTE LOGIC
+// ================================================================
+window.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (window.isBulkSelectMode && window.selectedUnitsList.length > 0) {
+            window.copySelectedUnits();
+        }
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+        window.pasteUnits();
+    }
+});
+
+window.pasteUnits = async function() {
+    try {
+        const text = await navigator.clipboard.readText();
+        if (!text || !text.includes('Đã chọn')) {
+            return Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Clipboard không chứa dữ liệu ô đa giác hợp lệ!', timer: 2000, showConfirmButton: false });
+        }
+        
+        // Parse đơn giản (Ví dụ: thông báo là đã nhận dữ liệu)
+        // Trong thực tế có thể tạo mới ô dựa trên text nếu có tọa độ, 
+        // nhưng hiện tại copySelectedUnits chỉ copy text mô tả.
+        // Ta có thể dùng nó để "dán" thuộc tính vào các ô đang chọn.
+        
+        if (window.selectedUnitsList.length === 0) {
+            return Swal.fire("Thông báo", "Vui lòng chọn các ô mục tiêu để dán thuộc tính (Tên/Khách/Đơn).", "info");
+        }
+
+        const lines = text.split('\n');
+        const dataLine = lines.find(l => l.includes('Tên:'));
+        if (!dataLine) return;
+
+        const nameMatch = dataLine.match(/Tên: (.*?) \|/);
+        const custMatch = dataLine.match(/Khách: (\d+)/);
+        const orderMatch = dataLine.match(/Đơn: (\d+)/);
+        const colorMatch = dataLine.match(/Màu: (#\w+)/);
+
+        const newData = {
+            name: nameMatch ? nameMatch[1] : null,
+            customers: custMatch ? parseInt(custMatch[1]) : 0,
+            orders: orderMatch ? parseInt(orderMatch[1]) : 0,
+            color: colorMatch ? colorMatch[1] : null
+        };
+
+        const { isConfirmed } = await Swal.fire({
+            title: 'Dán thuộc tính?',
+            html: `Áp dụng thông tin sau cho <b>${window.selectedUnitsList.length}</b> ô đang chọn:<br>
+                   - Tên: ${newData.name || 'Giữ nguyên'}<br>
+                   - Khách: ${newData.customers}<br>
+                   - Đơn: ${newData.orders}<br>
+                   - Màu: <span style="display:inline-block;width:12px;height:12px;background:${newData.color}"></span> ${newData.color || 'Giữ nguyên'}`,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonText: 'Dán ngay'
+        });
+
+        if (!isConfirmed) return;
+
+        document.getElementById('loading-screen').style.display = 'flex';
+        const updates = window.selectedUnitsList.map(id => ({
+            id,
+            name: newData.name,
+            customer_count: newData.customers,
+            order_count: newData.orders,
+            color: newData.color
+        }));
+
+        const res = await fetch('/api/units/bulk-attributes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates })
+        });
+        const data = await res.json();
+        document.getElementById('loading-screen').style.display = 'none';
+
+        if (data.success) {
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Đã dán thuộc tính thành công!', timer: 2000, showConfirmButton: false })
+                .then(() => location.reload());
+        }
+    } catch (err) {
+        console.error("Paste error:", err);
+    }
+};
+
+// Hàm khởi tạo Panel (Kéo/Co giãn) dùng chung
+window.initGenericPanel = function(panelId, handleId) {
+    const panel = document.getElementById(panelId);
+    const header = document.getElementById(handleId);
+    if (!panel || !header) return;
+
+    let isDragging = false;
+    let startX, startY, startLeft, startTop;
+
+    header.onmousedown = (e) => {
+        if (e.target.closest("button")) return;
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = panel.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            panel.style.left = startLeft + (e.clientX - startX) + "px";
+            panel.style.top = startTop + (e.clientY - startY) + "px";
+            panel.style.right = "auto";
+            panel.style.bottom = "auto";
+        };
+
+        const onMouseUp = () => {
+            isDragging = false;
+            document.removeEventListener("mousemove", onMouseMove);
+            document.removeEventListener("mouseup", onMouseUp);
+        };
+
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+    };
+
+    const resizers = panel.querySelectorAll(".resizer");
+    resizers.forEach((resizer) => {
+        resizer.onmousedown = (e) => {
+            e.preventDefault();
+            const type = resizer.classList[1];
+            const startW = panel.offsetWidth;
+            const startH = panel.offsetHeight;
+            const startMouseX = e.clientX;
+            const startMouseY = e.clientY;
+            const startL = panel.offsetLeft;
+            const startT = panel.offsetTop;
+
+            const onMouseMove = (e) => {
+                if (type.includes("r")) panel.style.width = startW + (e.clientX - startMouseX) + "px";
+                if (type.includes("b")) panel.style.height = startH + (e.clientY - startMouseY) + "px";
+                if (type.includes("l")) {
+                    const newWidth = startW - (e.clientX - startMouseX);
+                    if (newWidth > 150) {
+                        panel.style.width = newWidth + "px";
+                        panel.style.left = startL + (e.clientX - startMouseX) + "px";
+                    }
+                }
+                if (type.includes("t")) {
+                    const newHeight = startH - (e.clientY - startMouseY);
+                    if (newHeight > 50) {
+                        panel.style.height = newHeight + "px";
+                        panel.style.top = startT + (e.clientY - startMouseY) + "px";
+                    }
+                }
+            };
+
+            const onMouseUp = () => {
+                document.removeEventListener("mousemove", onMouseMove);
+                document.removeEventListener("mouseup", onMouseUp);
+            };
+
+            document.addEventListener("mousemove", onMouseMove);
+            document.addEventListener("mouseup", onMouseUp);
+        };
+    });
 };
 
 // ================================================================

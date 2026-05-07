@@ -150,21 +150,39 @@
         </button>
       </div>
 
-      <!-- Panel Bottom Center (Chứa Nút Gộp và Nút Hủy) -->
+      <!-- Panel Quản lý chọn nhiều (Bulk Action Panel) -->
       <div id="bulk-action-panel">
-        <span class="bulk-title">Đã chọn: <span id="bulk-count">0</span> ô</span>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
-          <button class="btn-blue" onclick="window.startBulkMerge()" title="Gộp ô">
-            <i class="fa-solid fa-object-group"></i> Gộp
+        <div class="resizer resizer-r"></div>
+        <div class="resizer resizer-b"></div>
+        <div class="resizer resizer-l"></div>
+        <div class="resizer resizer-t"></div>
+        <div class="resizer resizer-rb"></div>
+        <div class="stats-panel-header" id="bulk-panel-drag-handle">
+          <span><i class="fa-solid fa-list-check"></i> Quản lý chọn</span>
+          <button onclick="window.cancelBulkMode()" title="Đóng">
+            <i class="fa-solid fa-times"></i>
           </button>
-          <button class="btn-copy" onclick="window.copySelectedUnits()" title="Copy thông tin">
-            <i class="fa-solid fa-copy"></i> Copy
-          </button>
-          <button class="btn-red" onclick="window.deleteSelectedUnits()" title="Xóa các ô đã chọn">
-            <i class="fa-solid fa-trash"></i> Xóa
-          </button>
-          <button class="btn-red" id="bulk-cancel-btn" onclick="window.cancelBulkMode()">
-            <i class="fa-solid fa-xmark"></i> Hủy
+        </div>
+        <div class="stats-panel-body">
+          <div style="margin-bottom: 10px; font-weight: bold; font-size: 13px;">
+            Đã chọn: <span id="bulk-count" style="color: var(--accent);">0</span> ô
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+            <button class="btn-blue" onclick="window.startBulkMerge()" title="Gộp ô">
+              <i class="fa-solid fa-object-group"></i> Gộp
+            </button>
+            <button class="btn-copy" onclick="window.copySelectedUnits()" title="Copy thông tin">
+              <i class="fa-solid fa-copy"></i> Copy
+            </button>
+            <button class="btn-copy" style="background-color: #27ae60;" onclick="window.pasteUnits()" title="Paste thông tin">
+              <i class="fa-solid fa-paste"></i> Paste
+            </button>
+            <button class="btn-red" onclick="window.deleteSelectedUnits()" title="Xóa các ô đã chọn">
+              <i class="fa-solid fa-trash"></i> Xóa
+            </button>
+          </div>
+          <button class="btn-red" style="margin-top: 8px; width: 100%;" onclick="window.cancelBulkMode()">
+            <i class="fa-solid fa-xmark"></i> Hủy chọn
           </button>
         </div>
       </div>

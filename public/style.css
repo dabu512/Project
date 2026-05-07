@@ -304,11 +304,15 @@ button {
   transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+body.management-panel-open #btn-show-version-stats {
+  right: calc(var(--management-panel-width, 500px) + 15px);
+}
+
 #stats-summary-panel {
   position: absolute;
   width: 250px;
   height: 296px;
-  left: 1029px;
+  right: 15px;
   top: 95px;
   background: white;
   z-index: 2000;
@@ -318,6 +322,11 @@ button {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid #ddd;
+  transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.management-panel-open #stats-summary-panel {
+  right: calc(var(--management-panel-width, 500px) + 15px);
 }
 
 #stats-summary-panel .stats-panel-body {
@@ -430,19 +439,72 @@ body.management-panel-open #toggle-bulk-mode-btn {
 
 #bulk-action-panel {
   position: absolute;
-  bottom: 30px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 1000;
-  background-color: white;
-  padding: 10px 20px;
+  width: 212px;
+  height: 184px;
+  right: 15px;
+  top: 70px;
+  background: white;
+  z-index: 2000;
   border-radius: 8px;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   display: none;
-  /* Initially hidden */
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #ddd;
+  transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.management-panel-open #bulk-action-panel {
+  right: calc(var(--management-panel-width, 500px) + 15px);
+}
+
+/* Các class dùng chung cho header/body của panel */
+#bulk-action-panel .stats-panel-header {
+  background: #27ae60;
+  color: white;
+  padding: 8px 12px;
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  gap: 10px;
+  font-size: 13px;
+  cursor: move;
+}
+
+#bulk-action-panel .stats-panel-header button {
+  all: unset;
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#bulk-action-panel .stats-panel-body {
+  padding: 10px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+#bulk-action-panel .resizer {
+  position: absolute;
+  z-index: 2001;
+}
+#bulk-action-panel .resizer-r {
+  right: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+}
+#bulk-action-panel .resizer-b {
+  bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+}
+#bulk-action-panel .resizer-l {
+  left: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+}
+#bulk-action-panel .resizer-t {
+  top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+}
+#bulk-action-panel .resizer-rb {
+  right: 0; bottom: 0; width: 10px; height: 10px; cursor: nwse-resize;
 }
 
 .bulk-title {
@@ -470,6 +532,11 @@ body.management-panel-open #toggle-bulk-mode-btn {
   gap: 4px;
   padding: 6px 8px;
   border: 1px solid #ddd;
+  transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.management-panel-open #cursor-mode-toolbar {
+  transform: translateX(calc(-1 * var(--management-panel-width, 500px)));
 }
 
 .cursor-mode-btn {

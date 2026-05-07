@@ -342,19 +342,39 @@ body.management-panel-open #stats-summary-panel {
   z-index: 2001;
 }
 #stats-summary-panel .resizer-r {
-  right: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
 }
 #stats-summary-panel .resizer-b {
-  bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
 }
 #stats-summary-panel .resizer-l {
-  left: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
 }
 #stats-summary-panel .resizer-t {
-  top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
 }
 #stats-summary-panel .resizer-rb {
-  right: 0; bottom: 0; width: 10px; height: 10px; cursor: nwse-resize;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
 }
 
 #stats-summary-panel .stats-panel-header {
@@ -439,9 +459,10 @@ body.management-panel-open #toggle-bulk-mode-btn {
 
 #bulk-action-panel {
   position: absolute;
-  width: 212px;
-  height: 184px;
-  right: 15px;
+  width: 150px; /* Thu hẹp chiều rộng tổng thể */
+  height: auto; /* Để chiều cao tự động theo nội dung hoặc resize */
+  min-height: 160px;
+  right: 115px; /* Dịch sang trái 100px (15px gốc + 100px) */
   top: 70px;
   background: white;
   z-index: 2000;
@@ -449,13 +470,16 @@ body.management-panel-open #toggle-bulk-mode-btn {
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
   display: none;
   flex-direction: column;
+  align-items: center; /* Căn giữa các nút theo chiều ngang */
+  justify-content: center; /* Căn giữa các nút theo chiều dọc */
+  padding: 15px 10px;
   overflow: hidden;
   border: 1px solid #ddd;
   transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 body.management-panel-open #bulk-action-panel {
-  right: calc(var(--management-panel-width, 500px) + 15px);
+  right: calc(var(--management-panel-width, 500px) + 115px);
 }
 
 /* Các class dùng chung cho header/body của panel */
@@ -492,27 +516,67 @@ body.management-panel-open #bulk-action-panel {
   z-index: 2001;
 }
 #bulk-action-panel .resizer-r {
-  right: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
 }
 #bulk-action-panel .resizer-b {
-  bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
 }
 #bulk-action-panel .resizer-l {
-  left: 0; top: 0; bottom: 0; width: 5px; cursor: ew-resize;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: ew-resize;
 }
 #bulk-action-panel .resizer-t {
-  top: 0; left: 0; right: 0; height: 5px; cursor: ns-resize;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
 }
 #bulk-action-panel .resizer-rb {
-  right: 0; bottom: 0; width: 10px; height: 10px; cursor: nwse-resize;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+  height: 10px;
+  cursor: nwse-resize;
 }
 
 .bulk-title {
   font-weight: bold;
-  font-size: 14px;
+  font-size: 13px;
   color: #333;
+  margin-bottom: 12px;
+  text-align: center;
 }
 
+/* Sửa các nút trong box Quản lý chọn thành hình vuông nhỏ gọn */
+#bulk-action-panel button {
+  width: 48px; /* Chiều rộng bằng chiều cao */
+  height: 48px;
+  padding: 0; /* Loại bỏ padding thừa */
+  margin: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 0; /* Ẩn chữ để nút thành hình vuông icon gọn gàng */
+  transition: all 0.2s ease;
+}
+
+#bulk-action-panel button i {
+  font-size: 20px; /* Tăng kích thước icon cho dễ bấm */
+  margin: 0;
+}
 
 /* ===== Cursor Mode Toolbar ===== */
 /* Vị trí theo yêu cầu: left:664, top:546, width:177, height:64 */
@@ -613,7 +677,6 @@ body.management-panel-open #cursor-mode-toolbar {
 #bulk-action-panel {
   flex-direction: column;
 }
-
 
 .btn-red {
   background: #e74c3c;

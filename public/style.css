@@ -451,6 +451,103 @@ body.management-panel-open #toggle-bulk-mode-btn {
   color: #333;
 }
 
+
+/* ===== Cursor Mode Toolbar ===== */
+/* Vị trí theo yêu cầu: left:664, top:546, width:177, height:64 */
+#cursor-mode-toolbar {
+  position: absolute;
+  left: 664px;
+  top: 546px;
+  width: 177px;
+  height: 64px;
+  z-index: 1001;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  display: none; /* Chỉ hiện khi admin */
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+}
+
+.cursor-mode-btn {
+  flex: 1;
+  height: 100%;
+  border: 1px solid #ddd;
+  border-radius: 7px;
+  background: #f8f9fa;
+  color: #555;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 2px;
+  margin: 0;
+  width: auto;
+  transition: all 0.18s ease;
+}
+
+.cursor-mode-btn i {
+  font-size: 15px;
+}
+
+.cursor-mode-btn:hover {
+  background: #e8f0fe;
+  color: #2c3e50;
+  border-color: #3498db;
+}
+
+.cursor-mode-btn.active {
+  background: #3498db;
+  color: white;
+  border-color: #2980b9;
+  box-shadow: 0 2px 8px rgba(52, 152, 219, 0.4);
+}
+
+/* ===== Rubber-band drag selection box ===== */
+#drag-select-box {
+  position: absolute;
+  border: 2px dashed #3498db;
+  background: rgba(52, 152, 219, 0.12);
+  z-index: 1500;
+  pointer-events: none;
+  display: none;
+  border-radius: 2px;
+}
+
+/* ===== Copy button ===== */
+.btn-copy {
+  background: #8e44ad;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-weight: bold;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  width: auto;
+}
+
+.btn-copy:hover {
+  background: #7d3c98;
+}
+
+/* ===== Bulk action panel dạng row ===== */
+#bulk-action-panel {
+  flex-direction: column;
+}
+
+
 .btn-red {
   background: #e74c3c;
   color: white;

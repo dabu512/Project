@@ -26,6 +26,10 @@ if (currentUser && currentUser.role === 'admin') {
     const panelBtn = document.getElementById('bottom-panel-trigger');
     if (panelBtn) panelBtn.style.display = 'flex';
 
+    // Hiện cursor-mode toolbar cho admin
+    const cursorToolbar = document.getElementById('cursor-mode-toolbar');
+    if (cursorToolbar) cursorToolbar.style.display = 'flex';
+
     document.getElementById('hierarchy-section').style.display = 'block';
 
     // Fetch initial region layout
@@ -33,6 +37,205 @@ if (currentUser && currentUser.role === 'admin') {
         if (window.loadRegions) window.loadRegions();
     }, 500);
 }
+
+// ================================================================
+//  CURSOR MODE: Pan (mặc định) vs Drag-Select
+// ================================================================
+window._cursorMode = 'pan'; // 'pan' | 'select'
+
+window.setCursorMode = function (mode) {
+    window._cursorMode = mode;
+    document.getElementById('btn-mode-pan').classList.toggle('active', mode === 'pan');
+    document.getElementById('btn-mode-select').classList.toggle('active', mode === 'select');
+
+    if (typeof map !== 'undefined') {
+        if (mode === 'select') {
+            map.dragging.disable();
+            map.getContainer().style.cursor = 'crosshair';
+        } else {
+            map.dragging.enable();
+            map.getContainer().style.cursor = '';
+        }
+    }
+};
+
+// ================================================================
+//  RUBBER-BAND DRAG SELECTION
+// ================================================================
+(function initDragSelect() {
+    const selBox = document.getElementById('drag-select-box');
+    if (!selBox) return;
+
+    let isDragging = false;
+    let startX = 0, startY = 0;
+
+    const mapEl = document.getElementById('map');
+
+    mapEl.addEventListener('mousedown', function (e) {
+        if (window._cursorMode !== 'select') return;
+        // Chỉ chuột trái, không phải trên panel con
+        if (e.button !== 0) return;
+        if (e.target.closest('#cursor-mode-toolbar, #bulk-action-panel, #unit-info-panel, #stats-summary-panel')) return;
+
+        isDragging = true;
+        const rect = mapEl.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+
+        selBox.style.left = startX + 'px';
+        selBox.style.top = startY + 'px';
+        selBox.style.width = '0px';
+        selBox.style.height = '0px';
+        selBox.style.display = 'block';
+
+        // Kích hoạt bulk mode nếu chưa bật
+        if (!window.isBulkSelectMode) {
+            window.isBulkSelectMode = true;
+            const tbBtn = document.getElementById('toggle-bulk-mode-btn');
+            if (tbBtn) tbBtn.classList.add('active');
+            const panel = document.getElementById('bulk-action-panel');
+            if (panel) panel.style.display = 'flex';
+        }
+    });
+
+    mapEl.addEventListener('mousemove', function (e) {
+        if (!isDragging) return;
+        const rect = mapEl.getBoundingClientRect();
+        const curX = e.clientX - rect.left;
+        const curY = e.clientY - rect.top;
+
+        const x = Math.min(startX, curX);
+        const y = Math.min(startY, curY);
+        const w = Math.abs(curX - startX);
+        const h = Math.abs(curY - startY);
+
+        selBox.style.left = x + 'px';
+        selBox.style.top = y + 'px';
+        selBox.style.width = w + 'px';
+        selBox.style.height = h + 'px';
+    });
+
+    window.addEventListener('mouseup', function (e) {
+        if (!isDragging) return;
+        isDragging = false;
+        selBox.style.display = 'none';
+
+        if (window._cursorMode !== 'select') return;
+        if (!window.geoJsonLayer || typeof map === 'undefined') return;
+
+        // Tọa độ của hộp chọn trên màn hình → chuyển sang LatLng bounds
+        const mapEl2 = document.getElementById('map');
+        const rect = mapEl2.getBoundingClientRect();
+        const curX = e.clientX - rect.left;
+        const curY = e.clientY - rect.top;
+
+        // Convert pixel coords to map coords
+        const x1 = Math.min(startX, curX);
+        const y1 = Math.min(startY, curY);
+        const x2 = Math.max(startX, curX);
+        const y2 = Math.max(startY, curY);
+
+        // Nếu hộp quá nhỏ (< 5px) bỏ qua — coi như click thường
+        if ((x2 - x1) < 5 && (y2 - y1) < 5) return;
+
+        const sw = map.containerPointToLatLng([x1, y2]);
+        const ne = map.containerPointToLatLng([x2, y1]);
+        const selBounds = L.latLngBounds(sw, ne);
+
+        // Tìm tất cả polygon nằm trong bounds
+        window.geoJsonLayer.eachLayer(function (layer) {
+            if (!layer.getBounds) return;
+            const lb = layer.getBounds();
+            if (!selBounds.intersects(lb)) return;
+
+            const unitId = layer.options.id;
+            if (!unitId) return;
+            if (!window.selectedUnitsList.includes(unitId)) {
+                window.selectedUnitsList.push(unitId);
+                const el = layer.getElement();
+                if (el) el.classList.add('marching-ants-path');
+            }
+        });
+
+        const countSpan = document.getElementById('bulk-count');
+        if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
+    });
+})();
+
+// ================================================================
+//  COPY SELECTED UNITS
+// ================================================================
+window.copySelectedUnits = function () {
+    if (!window.selectedUnitsList || window.selectedUnitsList.length === 0) {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: 'Chưa chọn ô nào!', timer: 2000, showConfirmButton: false });
+        return;
+    }
+    if (!window.geoJsonLayer) return;
+
+    const lines = [];
+    lines.push(`Đã chọn ${window.selectedUnitsList.length} ô:`);
+    lines.push('---');
+
+    window.geoJsonLayer.eachLayer(function (layer) {
+        const uid = layer.options.id;
+        if (!window.selectedUnitsList.includes(uid)) return;
+        // Lấy thông tin từ feature properties
+        const f = layer.feature;
+        if (!f || !f.properties) return;
+        const p = f.properties;
+        const area = p.area ? p.area.toFixed(4) : '0';
+        lines.push(`Tên: ${p.name || 'N/A'} | ID: ${uid} | Khách: ${p.customers || 0} | Đơn: ${p.orders || 0} | Diện tích: ${area} km² | Màu: ${p.color || '#ccc'}`);
+    });
+
+    const text = lines.join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${window.selectedUnitsList.length} ô vào clipboard!`, timer: 2500, showConfirmButton: false });
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Đã copy!', timer: 2000, showConfirmButton: false });
+    });
+};
+
+// ================================================================
+//  DELETE SELECTED UNITS
+// ================================================================
+window.deleteSelectedUnits = async function () {
+    if (!window.selectedUnitsList || window.selectedUnitsList.length === 0) return;
+
+    const result = await Swal.fire({
+        title: `Xóa ${window.selectedUnitsList.length} ô?`,
+        text: 'Dữ liệu sẽ mất vĩnh viễn. Bạn có chắc không?',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonText: 'Hủy',
+        confirmButtonText: 'Đồng ý xóa'
+    });
+
+    if (!result.isConfirmed) return;
+
+    const ids = [...window.selectedUnitsList];
+    let successCount = 0;
+
+    for (const uid of ids) {
+        try {
+            const res = await fetch(`/api/units/${uid}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.success) successCount++;
+        } catch (_) { /* bỏ qua lỗi đơn lẻ */ }
+    }
+
+    window.cancelBulkMode();
+    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã xóa ${successCount}/${ids.length} ô!`, timer: 2500, showConfirmButton: false })
+        .then(() => { if (window.loadMapData) window.loadMapData(window.currentVersionId); });
+};
+
 
 if (currentUser) {
     var map = L.map('map').setView([21.02, 105.84], 14);

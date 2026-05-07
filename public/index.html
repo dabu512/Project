@@ -137,16 +137,40 @@
         </div>
       </div>
 
+      <!-- Toolbar chế độ con trỏ chuột (Bottom Center) -->
+      <!-- Vị trí: width:177, height:64, left:664, top:546 -->
+      <div id="cursor-mode-toolbar">
+        <button id="btn-mode-pan" class="cursor-mode-btn active" title="Chế độ di chuyển bản đồ" onclick="window.setCursorMode('pan')">
+          <i class="fa-solid fa-hand"></i>
+          <span>Di chuyển</span>
+        </button>
+        <button id="btn-mode-select" class="cursor-mode-btn" title="Chế độ kéo chọn đa giác" onclick="window.setCursorMode('select')">
+          <i class="fa-solid fa-vector-square"></i>
+          <span>Chọn vùng</span>
+        </button>
+      </div>
+
       <!-- Panel Bottom Center (Chứa Nút Gộp và Nút Hủy) -->
       <div id="bulk-action-panel">
         <span class="bulk-title">Đã chọn: <span id="bulk-count">0</span> ô</span>
-        <button class="btn-blue" onclick="window.startBulkMerge()">
-          <i class="fa-solid fa-object-group"></i> Gộp các ô đa giác
-        </button>
-        <button class="btn-red" id="bulk-cancel-btn" onclick="window.cancelBulkMode()">
-          <i class="fa-solid fa-xmark"></i> Hủy
-        </button>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:center;">
+          <button class="btn-blue" onclick="window.startBulkMerge()" title="Gộp ô">
+            <i class="fa-solid fa-object-group"></i> Gộp
+          </button>
+          <button class="btn-copy" onclick="window.copySelectedUnits()" title="Copy thông tin">
+            <i class="fa-solid fa-copy"></i> Copy
+          </button>
+          <button class="btn-red" onclick="window.deleteSelectedUnits()" title="Xóa các ô đã chọn">
+            <i class="fa-solid fa-trash"></i> Xóa
+          </button>
+          <button class="btn-red" id="bulk-cancel-btn" onclick="window.cancelBulkMode()">
+            <i class="fa-solid fa-xmark"></i> Hủy
+          </button>
+        </div>
       </div>
+
+      <!-- Rubber-band selection box -->
+      <div id="drag-select-box"></div>
 
       <!-- Panel thông tin đa giác bên phải -->
       <div id="unit-info-panel">

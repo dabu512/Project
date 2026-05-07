@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hệ thống Quản lý GIS (GIS Admin)</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <header id="main-header">
+    <div class="logo">
+      <i class="fa-solid fa-map-location-dot"></i>
+      <span>Hệ thống GIS Admin</span>
+    </div>
+    <div id="user-info"></div>
+  </header>
+
+  <main class="app-container">
+    <aside id="sidebar">
+      <button id="sidebar-close" onclick="window.toggleSidebar()" title="Đóng sidebar">
+        <i class="fa-solid fa-times"></i>
+      </button>
+      <div class="sidebar-section" id="hierarchy-section" style="display: none">
+        <h3 onclick="window.toggleSection(this)" style="
+              cursor: pointer;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            ">
+          <span><i class="fa-solid fa-layer-group"></i> Chọn Vùng</span>
+          <i class="fa-solid fa-chevron-down toggle-icon"></i>
+        </h3>
+        <div class="section-content" id="hierarchy-content" style="display: flex; flex-direction: column; gap: 8px">
+          <select id="region-select" class="swal2-input" style="display: none" onchange="loadProvinces()">
+            <option value="">-- Chọn Khu vực --</option>
+          </select>
+          <select id="province-select" class="swal2-input" style="
+                height: 35px;
+                width: 100%;
+                font-size: 14px;
+                margin: 0;
+                padding: 0 10px;
+              " onchange="loadVersions()" disabled>
+            <option value="">-- Chọn Tỉnh --</option>
+          </select>
+          <div style="display: flex; gap: 5px">
+            <select id="version-select" class="swal2-input" style="
+                  height: 35px;
+                  flex: 1;
+                  font-size: 14px;
+                  margin: 0;
+                  padding: 0 10px;
+                " onchange="onVersionChange()" disabled>
+              <option value="">-- Chọn Bản đồ --</option>
+            </select>
+            <button id="btn-create-version" class="btn-blue" onclick="createNewVersion()" disabled
+              title="Tạo Version mới">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+            <button id="btn-delete-version" class="btn-red" onclick="deleteCurrentVersion()" disabled
+              title="Xóa Version này" style="width: auto; padding: 0 10px">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+          <button id="btn-apply-version" class="btn-green" style="display: none" onclick="applyCurrentVersion()">
+            <i class="fa-solid fa-check"></i> Chốt Version Này
+          </button>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3 onclick="window.toggleSection(this)" style="
+              cursor: pointer;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            ">
+          <span><i class="fa-solid fa-chart-line"></i> Thống kê khu vực</span>
+          <i class="fa-solid fa-chevron-down toggle-icon"></i>
+        </h3>
+        <div class="section-content" id="sidebar-content">
+          <p class="empty-msg">Click vào một ô trên bản đồ để xem dữ liệu.</p>
+        </div>
+      </div>
+
+      <div class="sidebar-section" id="admin-tools" style="display: none">
+        <h3 onclick="window.toggleSection(this)" style="
+              cursor: pointer;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            ">
+          <span><i class="fa-solid fa-toolbox"></i> Công cụ </span>
+          <i class="fa-solid fa-chevron-down toggle-icon"></i>
+        </h3>
+        <div class="section-content" id="admin-tools-content">
+          <p class="empty-msg">
+            Thanh công cụ vẽ sẽ hiện trên bản đồ. Click vào ô đã vẽ để tinh
+            chỉnh thuộc tính nâng cao.
+          </p>
+        </div>
+      </div>
+    </aside>
+    <div id="map">
+      <!-- Nút tròn bật chế độ khoanh vùng (Top Right) -->
+      <button id="toggle-bulk-mode-btn" onclick="window.toggleBulkMode()" title="Bật chế độ chọn nhiều ô">
+        <i class="fa-solid fa-layer-group"></i>
+      </button>
+
+      <!-- Nút tròn xem thông số (Eye) - Luôn hiển thị -->
+      <button id="btn-show-version-stats" onclick="window.toggleStatsPanel()" title="Xem thông số các vùng">
+        <i class="fa-solid fa-eye"></i>
+      </button>
+
+      <!-- Bảng thông số vùng -->
+      <div id="stats-summary-panel">
+        <div class="resizer resizer-r"></div>
+        <div class="resizer resizer-b"></div>
+        <div class="resizer resizer-l"></div>
+        <div class="resizer resizer-t"></div>
+        <div class="resizer resizer-rb"></div>
+        <div class="stats-panel-header" id="stats-panel-drag-handle">
+          <span><i class="fa-solid fa-chart-pie"></i> Thông số vùng</span>
+          <button onclick="window.toggleStatsPanel()" title="Đóng">
+            <i class="fa-solid fa-times"></i>
+          </button>
+        </div>
+        <div class="stats-panel-body" id="stats-summary-content">
+          <p class="empty-msg">Nhấn icon mắt để tải dữ liệu...</p>
+        </div>
+      </div>
+
+      <!-- Panel Bottom Center (Chứa Nút Gộp và Nút Hủy) -->
+      <div id="bulk-action-panel">
+        <span class="bulk-title">Đã chọn: <span id="bulk-count">0</span> ô</span>
+        <button class="btn-blue" onclick="window.startBulkMerge()">
+          <i class="fa-solid fa-object-group"></i> Gộp các ô đa giác
+        </button>
+        <button class="btn-red" id="bulk-cancel-btn" onclick="window.cancelBulkMode()">
+          <i class="fa-solid fa-xmark"></i> Hủy
+        </button>
+      </div>
+
+      <!-- Panel thông tin đa giác bên phải -->
+      <div id="unit-info-panel">
+        <div id="unit-info-panel-header">
+          <span id="unit-info-panel-title"><i class="fa-solid fa-map-pin"></i> Thông tin ô</span>
+          <button id="unit-info-panel-close" onclick="
+                document
+                  .getElementById('unit-info-panel')
+                  .classList.remove('visible');
+                if (window.clearSelectedPolygon) window.clearSelectedPolygon();
+              " title="Đóng">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div id="unit-info-panel-body"></div>
+      </div>
+      <!-- Nút bật/tắt sidebar -->
+      <button id="sidebar-toggle" onclick="window.toggleSidebar()" title="Mở/Đóng sidebar">
+        <i class="fa-solid fa-bars"></i>
+      </button>
+
+      <div id="bottom-management-panel">
+        <div id="panel-resize-handle-v"></div>
+        <div id="panel-resize-handle-h"></div>
+
+        <!-- Nút đóng trồi ra bên trái -->
+        <button class="panel-close-btn" onclick="window.toggleBottomPanel()">
+          <i class="fa-solid fa-chevron-left"></i>
+        </button>
+
+        <div id="bottom-panel-header">
+          <div class="panel-title">
+            <i class="fa-solid fa-layer-group"></i>
+            <span>Quản lý Ô đa giác</span>
+          </div>
+          <div id="bottom-panel-actions">
+            <!-- Actions will be rendered here dynamically -->
+          </div>
+        </div>
+        <div id="district-management-list">
+          <p class="empty-msg">Đang tải dữ liệu...</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div id="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-header">
+        <i class="fa-solid fa-circle-user fa-3x"></i>
+        <h2 id="auth-title">Đăng nhập</h2>
+      </div>
+
+      <form id="login-form" onsubmit="
+            event.preventDefault();
+            handleLogin();
+          ">
+        <div class="input-group">
+          <i class="fa-solid fa-user"></i>
+          <input type="text" id="l-user" required />
+          <label for="l-user">Tên đăng nhập</label>
+          <span class="underline"></span>
+        </div>
+        <div class="input-group">
+          <i class="fa-solid fa-lock"></i>
+          <input type="password" id="l-pass" required />
+          <label for="l-pass">Mật khẩu</label>
+          <span class="underline"></span>
+        </div>
+        <button type="submit" class="btn-blue">Đăng nhập</button>
+        <p class="toggle-text" onclick="toggleAuth(true)">
+          Chưa có tài khoản? <b>Đăng ký</b>
+        </p>
+      </form>
+
+      <form id="register-form" style="display: none" onsubmit="
+            event.preventDefault();
+            handleRegister();
+          ">
+        <div class="input-group">
+          <i class="fa-solid fa-user"></i>
+          <input type="text" id="r-user" required />
+          <label for="r-user">Tên đăng nhập</label>
+          <span class="underline"></span>
+        </div>
+        <div class="input-group">
+          <i class="fa-solid fa-lock"></i>
+          <input type="password" id="r-pass" required />
+          <label for="r-pass">Mật khẩu</label>
+          <span class="underline"></span>
+        </div>
+        <div class="input-group">
+          <i class="fa-solid fa-id-card"></i>
+          <input type="text" id="r-name" required />
+          <label for="r-name">Họ và tên</label>
+          <span class="underline"></span>
+        </div>
+        <select id="r-role">
+          <option value="driver">Tài xế (Driver)</option>
+          <option value="admin">Quản trị viên (Admin)</option>
+        </select>
+        <button type="submit" class="btn-green">Xác nhận Đăng ký</button>
+        <p class="toggle-text" onclick="toggleAuth(false)">
+          Quay lại <b>Đăng nhập</b>
+        </p>
+      </form>
+    </div>
+  </div>
+
+  <div id="loading-screen" style="display: none">
+    <div class="spinner"></div>
+    <p>Đang tải dữ liệu...</p>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <script src="auth.js"></script>
+  <script src="hierarchy.js"></script>
+  <script src="map-api.js"></script>
+  <script src="map-ui.js"></script>
+  <script src="map.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,657 @@
+// public/map.js
+const currentUser = checkLogin();
+
+let modifiedUnits = new Map();
+window.selectedUnitsList = []; // Array to store multiple selections
+window.isBulkSelectMode = false;
+window.currentVersionId = null;
+window.currentVersionStatus = 'draft';
+window.geoJsonLayer = null;
+window.currentSelectedLayer = null; // Track polygon đang được highlight viền vàng
+
+/** Xóa highlight viền vàng khỏi polygon đang chọn */
+window.clearSelectedPolygon = function() {
+    if (window.currentSelectedLayer) {
+        const el = window.currentSelectedLayer.getElement();
+        if (el) el.classList.remove('polygon-selected');
+        window.currentSelectedLayer = null;
+    }
+};
+
+if (currentUser && currentUser.role === 'admin') {
+    // Reveal the toggle button only for admin
+    const tbBtn = document.getElementById('toggle-bulk-mode-btn');
+    if (tbBtn) tbBtn.style.display = 'flex';
+
+    const panelBtn = document.getElementById('bottom-panel-trigger');
+    if (panelBtn) panelBtn.style.display = 'flex';
+
+    document.getElementById('hierarchy-section').style.display = 'block';
+
+    // Fetch initial region layout
+    setTimeout(() => {
+        if (window.loadRegions) window.loadRegions();
+    }, 500);
+}
+
+if (currentUser) {
+    var map = L.map('map').setView([21.02, 105.84], 14);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // --- NGĂN CHẶN MAP NHẬN SỰ KIỆN KHI THAO TÁC TRÊN PANEL ---
+    const stopPropagationElements = [
+        'stats-summary-panel',
+        'unit-info-panel',
+        'bulk-action-panel',
+        'sidebar',
+        'bottom-management-panel'
+    ];
+    stopPropagationElements.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            L.DomEvent.disableClickPropagation(el);
+            L.DomEvent.disableScrollPropagation(el);
+            // Bổ sung cho các sự kiện chạm và wheel nâng cao
+            L.DomEvent.on(el, 'contextmenu dblclick wheel mousewheel touchstart', L.DomEvent.stopPropagation);
+        }
+    });
+
+    // --- ĐOẠN 1: HIỆN NÚT VẼ (Chỉ Admin mới thấy) ---
+    if (currentUser.role === 'admin') {
+        // --- CUSTOM EDIT MODE STATE ---
+        window.isCustomEditMode = false;      // Trạng thái nút Edit tùy chỉnh
+        window.editingLayers = new Set();     // Tập hợp các layer đang được chỉnh sửa
+
+        // Bật snapping toàn cục khi vẽ
+        map.pm.setGlobalOptions({
+            snappable: true,
+            snapDistance: 15,
+            snapMiddle: false,
+            snapSegment: true,
+            allowSelfIntersection: false,
+            snappingDistance: 20,
+        });
+
+        // Hiện các nút vẽ (KHÔNG bật editMode mặc định của Geoman)
+        map.pm.addControls({
+            position: 'topleft',
+            drawMarker: false,
+            drawPolyline: true,
+            drawCircle: false,
+            drawCircleMarker: false,
+            drawRectangle: true,
+            drawPolygon: true,
+            editMode: false,      // TẮT nút Edit mặc định - dùng custom button
+            dragMode: true,
+            removalMode: true,
+            cutPolygon: false,
+            rotateMode: true,
+        });
+
+        // ----- NÚT EDIT TÙY CHỈNH (thanh bên trái bản đồ) -----
+        // Thêm nút custom Edit vào toolbar của Geoman
+        map.pm.Toolbar.createCustomControl({
+            name: 'customEditMode',
+            block: 'edit',
+            title: 'Chỉnh sửa ranh giới đa giác',
+            className: 'custom-edit-btn',
+            toggle: true,
+            onClick: () => {
+                window.isCustomEditMode = !window.isCustomEditMode;
+                if (!window.isCustomEditMode) {
+                    // Tắt edit mode: tắt tất cả layer đang edit
+                    window.editingLayers.forEach(layer => {
+                        if (layer.pm) layer.pm.disable();
+                    });
+                    window.editingLayers.clear();
+                    // Lưu các thay đổi
+                    setTimeout(sendUpdatesToServer, 300);
+                    map.getContainer().style.cursor = '';
+                } else {
+                    map.getContainer().style.cursor = 'crosshair';
+                }
+            },
+            afterClick: () => { }
+        });
+
+        // ----- HÀM GỬI DỮ LIỆU LÊN SERVER (Bulk Update) -----
+        window.sendUpdatesToServer = async function sendUpdatesToServer() {
+            if (modifiedUnits.size === 0) return;
+
+            const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 4000 });
+            Toast.fire({ icon: 'info', title: 'Đang kiểm tra và lưu ranh giới...' });
+
+            const updates = [];
+            for (let [id, geometry] of modifiedUnits) {
+                updates.push({ id, geometry });
+            }
+
+            try {
+                const response = await fetch('/api/units/bulk-update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        updates: updates,
+                        version_id: window.currentVersionId
+                    })
+                });
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    modifiedUnits.clear();
+                    const Toast2 = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2500 });
+                    Toast2.fire({ icon: 'success', title: 'Đã lưu ranh giới thành công!' });
+                    // Tải lại dữ liệu để cập nhật diện tích mới
+                    if (window.loadMapData) window.loadMapData(window.currentVersionId);
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Lỗi ranh giới',
+                        text: data.message || 'Phát hiện chồng lấn ranh giới với ô khác.'
+                    }).then(() => {
+                        location.reload();
+                    });
+                }
+            } catch (err) {
+                console.error("Bulk Update Error:", err);
+                Swal.fire('Lỗi!', 'Không kết nối được tới Server.', 'error');
+            }
+        }
+
+        // Dự phòng lưu khi tắt drag mode
+        map.on('pm:globaldragmodedisabled', () => {
+            setTimeout(sendUpdatesToServer, 300);
+        });
+
+        // ----- HÀM ĐỒNG BỘ ĐỈNH CHUNG KHI KÉO -----
+        // Hàm tìm tất cả layer có đỉnh tại tọa độ (lat, lng) với ngưỡng sai số nhỏ
+        function COORD_EPS() { return 1e-8; } // epsilon cho so sánh tọa độ
+
+        function coordsMatch(a, b) {
+            return Math.abs(a[0] - b[0]) < COORD_EPS() && Math.abs(a[1] - b[1]) < COORD_EPS();
+        }
+
+        // Lấy tất cả đỉnh (coords) của một layer GeoJSON polygon
+        function getLayerCoords(layer) {
+            const gj = layer.toGeoJSON();
+            if (!gj || !gj.geometry) return [];
+            const geom = gj.geometry;
+            if (geom.type === 'Polygon') return geom.coordinates[0];
+            if (geom.type === 'MultiPolygon') return geom.coordinates.flatMap(p => p[0]);
+            return [];
+        }
+
+        // Khi kéo xong 1 đỉnh trong editingLayers, đồng bộ sang tất cả layer khác đang edit
+        function syncSharedVertex(movedLayer, movedUnitId) {
+            if (!window.geoJsonLayer) return;
+            // Lấy tọa độ mới của layer vừa kéo
+            const newCoords = getLayerCoords(movedLayer);
+
+            // Duyệt tất cả các layer trên bản đồ
+            window.geoJsonLayer.eachLayer(otherLayer => {
+                if (otherLayer === movedLayer) return;
+                if (!otherLayer.pm || !otherLayer.pm.enabled()) return;
+
+                // Kiểm tra xem có đỉnh nào khớp không
+                const otherCoords = getLayerCoords(otherLayer);
+                let needsUpdate = false;
+
+                // Lấy latlngs thực của layer kia
+                let latlngs = otherLayer.getLatLngs();
+                const flatLatlngs = Array.isArray(latlngs[0]) ? latlngs[0] : latlngs;
+
+                flatLatlngs.forEach((latlng, idx) => {
+                    // Tìm đỉnh mới nhất trong newCoords khớp với đỉnh này
+                    newCoords.forEach(newPt => {
+                        // So sánh với tọa độ gốc (trước khi edit) thông qua pm markers
+                    });
+                });
+
+                // Phương pháp: compare marker handles của movedLayer với latlngs của otherLayer
+                if (movedLayer.pm && movedLayer.pm._markers) {
+                    const markerGroups = movedLayer.pm._markers;
+                    const allMarkers = Array.isArray(markerGroups[0]) ? markerGroups[0] : markerGroups;
+
+                    allMarkers.forEach(marker => {
+                        const newLL = marker.getLatLng();
+                        // Tìm đỉnh trong otherLayer có tọa độ TrướcKhi kéo gần với nhau
+                        // Chúng ta dùng _origLatLng đã lưu trước đó
+                        const origLL = marker._origLatLng;
+                        if (!origLL) return;
+
+                        flatLatlngs.forEach((otherLL, idx) => {
+                            if (Math.abs(otherLL.lat - origLL.lat) < COORD_EPS() &&
+                                Math.abs(otherLL.lng - origLL.lng) < COORD_EPS()) {
+                                flatLatlngs[idx] = L.latLng(newLL.lat, newLL.lng);
+                                needsUpdate = true;
+                            }
+                        });
+                    });
+                }
+
+                if (needsUpdate) {
+                    if (Array.isArray(latlngs[0])) {
+                        otherLayer.setLatLngs([flatLatlngs]);
+                    } else {
+                        otherLayer.setLatLngs(flatLatlngs);
+                    }
+                    otherLayer.pm.reset(); // Cập nhật lại markers của geoman
+                    const otherId = otherLayer.options.id;
+                    if (otherId) {
+                        modifiedUnits.set(otherId, otherLayer.toGeoJSON().geometry);
+                    }
+                }
+            });
+        }
+
+        // Lưu tọa độ gốc (trước khi kéo) của tất cả marker khi bắt đầu kéo
+        function attachOrigLatLng(layer) {
+            if (!layer.pm || !layer.pm._markers) return;
+            const markerGroups = layer.pm._markers;
+            const allMarkers = Array.isArray(markerGroups[0]) ? markerGroups[0] : markerGroups;
+            allMarkers.forEach(marker => {
+                marker._origLatLng = marker.getLatLng();
+                marker.on('drag', () => {
+                    // Cập nhật real-time tọa độ gốc của các marker KHÁC trong layer này
+                    // (không thay đổi _origLatLng của chính nó trong lúc kéo)
+                });
+            });
+        }
+
+        // Hiện thêm cái khung Admin Tools ở Sidebar (đã tạo ở HTML)
+        const adminTools = document.getElementById('admin-tools');
+        if (adminTools) adminTools.style.display = 'block';
+    }
+
+    // Wrap in function
+    window.loadMapData = function (versionId) {
+        // Fallback về currentVersionId nếu không truyền vào
+        if (!versionId) versionId = window.currentVersionId;
+        // Remove old layer if exists
+        if (window.geoJsonLayer && typeof map !== 'undefined') {
+            map.removeLayer(window.geoJsonLayer);
+        }
+
+        // Tải ALL Units cho versionId cụ thể
+        fetch(`/api/units?versionId=${versionId || ''}`)
+            .then(res => {
+                // --- CHỖ CẦN THÊM: Kiểm tra trạng thái Server ---
+                console.log("Status Code từ Server:", res.status);
+                if (!res.ok) {
+                    throw new Error(`Server báo lỗi: ${res.status}`);
+                }
+                return res.json();
+            })
+            .then(data => {
+                // --- CHỖ CẦN THÊM: Kiểm tra dữ liệu thực tế ---
+                console.log("Dữ liệu nhận được:", data);
+
+                if (!data.features) {
+                    throw new Error("Dữ liệu không đúng định dạng GeoJSON (thiếu features)");
+                }
+
+                const layerGroup = L.geoJSON(data, {
+                    style: function (f) {
+                        return {
+                            color: "#333", weight: 2, fillOpacity: 0.5,
+                            fillColor: f.properties.color || '#ccc'
+                        };
+                    },
+                    onEachFeature: function (f, l) {
+                        const unitId = f.id || (f.properties && f.properties.id);
+                        l.options.id = unitId;
+
+                        // --- GHI NHẬN KHI KÉO CẢ Ô / CẮT / ROTATE ---
+                        const markAsModified = () => {
+                            if (unitId) modifiedUnits.set(unitId, l.toGeoJSON().geometry);
+                        };
+                        l.on('pm:dragend', markAsModified);
+                        l.on('pm:cut', markAsModified);
+                        l.on('pm:rotateend', markAsModified);
+
+                        // --- ĐỒNG BỘ ĐỈNH CHUNG KHI KÉO (pm:markerdrag) ---
+                        // Lưu snapshot vị trí TRƯỚC khi kéo cho marker đang active
+                        l.on('pm:markerdragstart', (ev) => {
+                            if (ev.marker) ev.marker._origLatLng = ev.marker.getLatLng();
+                        });
+
+                        l.on('pm:markerdrag', (ev) => {
+                            if (!window.geoJsonLayer || !ev.marker) return;
+                            const draggedMarker = ev.marker;
+                            const newLL = draggedMarker.getLatLng();
+                            const origLL = draggedMarker._origLatLng;
+                            if (!origLL) return;
+
+                            window.geoJsonLayer.eachLayer(otherLayer => {
+                                if (otherLayer === l) return;
+                                if (!otherLayer.pm || !otherLayer.pm.enabled()) return;
+
+                                let lls = otherLayer.getLatLngs();
+                                // Polygon: lls = [[pt, pt, ...]] ; MultiPolygon: lls = [[[pt, ...]]]
+                                const isMulti = Array.isArray(lls[0]) && Array.isArray(lls[0][0]);
+                                const ring = isMulti ? lls[0][0] : (Array.isArray(lls[0]) ? lls[0] : lls);
+
+                                let changed = false;
+                                for (let i = 0; i < ring.length; i++) {
+                                    if (Math.abs(ring[i].lat - origLL.lat) < 1e-8 &&
+                                        Math.abs(ring[i].lng - origLL.lng) < 1e-8) {
+                                        ring[i] = L.latLng(newLL.lat, newLL.lng);
+                                        changed = true;
+                                    }
+                                }
+                                if (changed) {
+                                    if (isMulti) otherLayer.setLatLngs([[ring]]);
+                                    else if (Array.isArray(lls[0])) otherLayer.setLatLngs([ring]);
+                                    else otherLayer.setLatLngs(ring);
+                                    // Refresh pm markers của layer kia
+                                    if (otherLayer.pm && otherLayer.pm._markers) {
+                                        try { otherLayer.pm.reset(); } catch (_) { }
+                                    }
+                                }
+                            });
+                        });
+
+                        l.on('pm:markerdragend', () => {
+                            // Lưu layer này
+                            markAsModified();
+                            // Lưu tất cả layer đang edit cùng bị tác động
+                            if (!window.geoJsonLayer) return;
+                            window.geoJsonLayer.eachLayer(otherLayer => {
+                                if (otherLayer === l) return;
+                                if (!otherLayer.pm || !otherLayer.pm.enabled()) return;
+                                const otherId = otherLayer.options.id;
+                                if (otherId) modifiedUnits.set(otherId, otherLayer.toGeoJSON().geometry);
+                            });
+                        });
+
+                        // --- CLICK: TOGGLE EDIT (khi isCustomEditMode) hoặc HIỆN THÔNG TIN ---
+                        const areaFormatted = f.properties.area ? f.properties.area.toFixed(2) : "0.00";
+                        l.on('click', function (e) {
+                            // 1. Bulk select mode
+                            if (window.isBulkSelectMode || (e.originalEvent && (e.originalEvent.shiftKey || e.originalEvent.ctrlKey))) {
+                                if (!unitId) return;
+                                if (!window.isBulkSelectMode) {
+                                    window.isBulkSelectMode = true;
+                                    const tbBtn = document.getElementById('toggle-bulk-mode-btn');
+                                    if (tbBtn) tbBtn.classList.add('active');
+                                    const panel = document.getElementById('bulk-action-panel');
+                                    if (panel) panel.style.display = 'flex';
+                                    // Xóa highlight viền vàng thông tin khi bước vào bulk mode
+                                    if (window.clearSelectedPolygon) window.clearSelectedPolygon();
+                                }
+                                const idx = window.selectedUnitsList.indexOf(unitId);
+                                if (idx > -1) {
+                                    window.selectedUnitsList.splice(idx, 1);
+                                    if (l.getElement()) l.getElement().classList.remove('marching-ants-path');
+                                } else {
+                                    window.selectedUnitsList.push(unitId);
+                                    if (l.getElement()) l.getElement().classList.add('marching-ants-path');
+                                }
+                                const countSpan = document.getElementById('bulk-count');
+                                if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
+                                return;
+                            }
+
+                            // 2. Custom edit mode: toggle per-polygon editing
+                            if (window.isCustomEditMode) {
+                                if (e.originalEvent) e.originalEvent.stopPropagation();
+                                if (l.pm && l.pm.enabled()) {
+                                    // Đang edit → TẮT
+                                    l.pm.disable();
+                                    if (window.editingLayers) window.editingLayers.delete(l);
+                                    l.setStyle({ weight: 2, color: '#333' });
+                                } else {
+                                    // Chưa edit → BẬT
+                                    l.pm.enable({ allowSelfIntersection: false });
+                                    if (window.editingLayers) window.editingLayers.add(l);
+                                    l.setStyle({ weight: 3, color: '#7d33ff' });
+                                    // Gán _origLatLng cho markers sau khi Geoman render xong
+                                    setTimeout(() => {
+                                        if (!l.pm || !l.pm._markers) return;
+                                        const groups = l.pm._markers;
+                                        const markers = Array.isArray(groups[0]) ? groups[0] : groups;
+                                        markers.forEach(m => {
+                                            m._origLatLng = m.getLatLng();
+                                            m.on('mousedown', () => { m._origLatLng = m.getLatLng(); });
+                                        });
+                                    }, 120);
+                                }
+                                return;
+                            }
+
+                            // 3. Hiện panel thông tin bình thường
+                            const currentProps = f.properties;
+                            currentProps.id = unitId;
+                            updateSidebarStats(currentProps);
+                            if (currentUser && currentUser.role === 'admin') {
+                                updateSidebarAdmin(unitId, currentProps);
+                            }
+
+                            // ✨ Highlight viền vàng polygon đang chọn
+                            window.clearSelectedPolygon();          // Xóa highlight cũ
+                            const selEl = l.getElement();
+                            if (selEl) selEl.classList.add('polygon-selected');
+                            window.currentSelectedLayer = l;        // Lưu lại để reset sau
+
+                            // Highlight card trong danh sách quản lý (nếu panel đang mở)
+                            if (window.highlightUnitCard) window.highlightUnitCard(unitId);
+                            const currentColor = f.properties.color || f.properties.zoneColor || '#cccccc';
+                            let colorRow = '';
+                            if (currentUser && currentUser.role === 'admin') {
+                                colorRow = `
+                                    <div class="panel-color-row">
+                                        <label>Màu đa giác:</label>
+                                        <input type="color" id="colorPicker-${unitId}" value="${currentColor}">
+                                        <button class="btn-change-color" onclick="changeUnitColor(${unitId})">Đổi Màu</button>
+                                    </div>
+                                `;
+                            }
+                            document.getElementById('unit-info-panel-title').innerHTML =
+                                `<i class="fa-solid fa-map-pin"></i> 📦 ${f.properties.name}`;
+                            document.getElementById('unit-info-panel-body').innerHTML = `
+                                <table>
+                                    <tr><td>Diện tích:</td><td>${areaFormatted} km²</td></tr>
+                                    <tr><td>Khách:</td><td>${f.properties.customers || 0}</td></tr>
+                                    <tr><td>Đơn:</td><td>${f.properties.orders || 0}</td></tr>
+                                </table>
+                                ${colorRow}
+                            `;
+                            document.getElementById('unit-info-panel').classList.add('visible');
+                        });
+
+                        l.on('pm:remove', () => {
+                            Swal.fire({
+                                title: `Xóa ô "${f.properties.name}"?`,
+                                text: "Dữ liệu này sẽ mất vĩnh viễn. Bạn có chắc không ?",
+                                icon: 'warning',
+                                showCancelButton: true,
+                                confirmButtonColor: '#d33',
+                                cancelButtonText: 'Hủy',
+                                confirmButtonText: 'Đồng ý xóa'
+                            }).then((result) => {
+                                if (result.isConfirmed) {
+                                    fetch(`/api/units/${unitId}`, { method: 'DELETE' })
+                                        .then(res => res.json())
+                                        .then(data => {
+                                            if (data.success) {
+                                                Swal.fire('Đã xóa!', 'Ô đã được gỡ khỏi bản đồ.', 'success');
+                                            } else {
+                                                Swal.fire('Lỗi!', 'Không thể xóa dữ liệu.', 'error');
+                                                location.reload();
+                                            }
+                                        });
+                                } else {
+                                    location.reload();
+                                }
+                            });
+                        });
+
+                    }
+                });
+                window.geoJsonLayer = layerGroup;
+                layerGroup.addTo(map);
+
+                // --- Cập nhật danh sách Ô đa giác ở sidebar ---
+                if (window.renderDistrictManagementList && data.features) {
+                    const unitsData = data.features.map(f => ({
+                        id: f.id || f.properties.id,
+                        name: f.properties.name,
+                        color: f.properties.color || f.properties.zoneColor || '#ccc',
+                        customer_count: f.properties.customers ?? 0,
+                        order_count: f.properties.orders ?? 0,
+                    }));
+                    window.renderDistrictManagementList(unitsData);
+                }
+
+                if (currentUser && currentUser.role === 'admin') {
+                    // Admin có quyền chỉnh sửa bất kỳ version nào đã được chọn
+                    const canEdit = !!window.currentVersionId;
+                    
+                    if (!canEdit) {
+                        map.pm.removeControls();
+                        document.getElementById('admin-tools-content').innerHTML = `
+                            <div style="padding: 10px; color: #dc3545; background: #f8d7da; border-radius: 5px; font-size: 13px;">
+                                <b>Lưu ý:</b> Không thể vẽ ở trạng thái hiện tại.<br>
+                                - Vui lòng chọn một <b>Phiên bản (Version)</b> ở mục Chọn Vùng để bắt đầu chỉnh sửa bản đồ.
+                            </div>
+                        `;
+                    } else {
+                        // Thêm lại các nút vẽ cơ bản
+                        map.pm.addControls({
+                            position: 'topleft',
+                            drawMarker: false,
+                            drawPolyline: true,
+                            drawCircle: false,
+                            drawCircleMarker: false,
+                            drawRectangle: true,
+                            drawPolygon: true,
+                            editMode: false, // Dùng nút custom
+                            dragMode: true,
+                            removalMode: true,
+                            cutPolygon: false,
+                            rotateMode: true
+                        });
+
+                        // Thêm lại nút Edit tùy chỉnh (pencil)
+                        if (!map.pm.Toolbar.getButtons().customEditMode) {
+                            map.pm.Toolbar.createCustomControl({
+                                name: 'customEditMode',
+                                block: 'edit',
+                                title: 'Bật/tắt chỉnh sửa ranh giới đa giác',
+                                className: 'custom-edit-btn',
+                                toggle: true,
+                                onClick: () => {
+                                    window.isCustomEditMode = !window.isCustomEditMode;
+                                    if (!window.isCustomEditMode) {
+                                        if (window.editingLayers) {
+                                            window.editingLayers.forEach(layer => {
+                                                if (layer.pm) layer.pm.disable();
+                                                layer.setStyle({ weight: 2, color: '#333' });
+                                            });
+                                            window.editingLayers.clear();
+                                        }
+                                        if (modifiedUnits.size > 0) setTimeout(window.sendUpdatesToServer, 300);
+                                        map.getContainer().style.cursor = '';
+                                    } else {
+                                        map.getContainer().style.cursor = 'crosshair';
+                                    }
+                                }
+                            });
+                        }
+                        document.getElementById('admin-tools-content').innerHTML = '<p class="empty-msg">Click vào ô muốn chỉnh sửa khi ở chế độ Edit ✏️. Bấm lại vào ô đó để tắt.</p>';
+                    }
+                }
+            })
+            .catch(err => {
+                // --- CHỖ NÀY SẼ HIỆN LỖI CHI TIẾT ---
+                console.error("Lỗi chi tiết:", err.message);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Lỗi tải bản đồ',
+                    text: err.message // Hiện thẳng lỗi ra để biết đường sửa
+                });
+            });
+
+        // --- ĐOẠN 2: KHI VẼ XONG MỘT Ô ---
+        map.off('pm:create'); // Tránh duplicate event listener khi loadMapData chạy nhiều lần
+        map.on('pm:create', async (e) => {
+            const layer = e.layer;
+            const geometry = layer.toGeoJSON().geometry; // Lấy tọa độ vừa vẽ
+
+            // Bỏ qua khi Geoman cắt bằng Scissors (pm:cut xử lý riêng), không cần kiểm tra overlap
+            if (e.shape === 'Cut') {
+                layer.remove(); // Xóa mảnh tạm của Geoman, reload để refetch
+                return;
+            }
+
+            if (e.shape === 'Line') {
+                // TÍNH NĂNG MỚI: CẮT ĐA GIÁC BẰNG ĐƯỜNG KẺ
+                document.getElementById('loading-screen').style.display = 'flex';
+                fetch('/api/units/split', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ geometry, version_id: window.currentVersionId })
+                }).then(res => res.json()).then(data => {
+                    document.getElementById('loading-screen').style.display = 'none';
+                    if (data.success) {
+                        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: data.message, timer: 3000, showConfirmButton: false });
+                        setTimeout(() => location.reload(), 1500);
+                    } else {
+                        Swal.fire('Thất bại', data.message, 'error');
+                        layer.remove(); // Xóa đường kẻ hỏng vì không cắt qua
+                    }
+                }).catch(err => {
+                    document.getElementById('loading-screen').style.display = 'none';
+                    Swal.fire('Lỗi', err.message, 'error');
+                    layer.remove();
+                });
+                return; // Ngừng logic của 'Polygon' (vẽ thêm ô)
+            }
+
+            // 1. Kiểm tra chồng lấn trước
+            document.getElementById('loading-screen').style.display = 'flex';
+            try {
+                const res = await fetch('/api/units/check-overlap', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ geometry, version_id: window.currentVersionId })
+                });
+                const data = await res.json();
+                document.getElementById('loading-screen').style.display = 'none';
+
+                if (data.overlap) {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Đè Ranh Giới!',
+                        text: `Ô vừa vẽ đã lấn vào khu vực của "${data.name}". Vui lòng vẽ lại!`,
+                        confirmButtonText: 'OK',
+                        confirmButtonColor: '#d33'
+                    }).then(() => {
+                        location.reload();
+                    });
+                    return; // Không hiện popup nhập liệu
+                }
+            } catch (err) {
+                document.getElementById('loading-screen').style.display = 'none';
+                console.error("Lỗi:", err);
+                return;
+            }
+
+            // 2. Nếu không lỗi, gọi hàm hiện bảng nhập thông tin
+            showSaveForm(geometry, layer);
+        });
+
+        // ĐÓNG NGOẶC HÀM loadMapData (Được thêm bởi thay đổi trước đó)
+    };
+
+    if (currentUser.role !== 'admin') {
+        // Render map for driver - currently just loading all units as districts are gone
+        window.loadMapData();
+    }
+}
+
+
+

@@ -537,6 +537,22 @@ window.updateCheckAllState = function () {
 // ============================================================
 
 /**
+ * Haversine: khoảng cách (km) giữa 2 điểm trên mặt cầu.
+ */
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Radius of Earth in kilometers
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
  * Chia ngẫu nhiên `total` thành `n` phần nguyên không âm có tổng = total.
  * Dùng "stars and bars" với n-1 điểm cắt ngẫu nhiên.
  */
@@ -571,6 +587,7 @@ function constrainedWeightedSplit(
   minPct,
   maxPct,
   variationPct,
+  unitDetails,
 ) {
   total = Math.max(0, parseInt(total) || 0);
   if (n <= 0) return [];
@@ -578,9 +595,53 @@ function constrainedWeightedSplit(
 
   // TẠO TRỌNG SỐ THỰC TẾ: Sử dụng hàm lũy thừa (Power Law) để tạo ra sự chênh lệch cực lớn.
   // Một vài ô sẽ nhận trọng số rất cao (điểm nóng), trong khi đa số nhận trọng số thấp.
-  const densityModifiers = Array(n)
+  let densityModifiers = Array(n)
     .fill(0)
     .map(() => Math.pow(Math.random(), 3) * 20 + 0.1);
+
+  // BƯỚC MỚI: DÀN CÁC ĐIỂM NÓNG RA XA NHAU
+  if (unitDetails && unitDetails.length === n) {
+    const MIN_HOTSPOT_DISTANCE_KM = 2.0; // Heuristic: 2km minimum distance
+
+    // 1. Gắn modifier vào unit details để sort
+    let unitsWithModifiers = unitDetails
+      .map((unit, i) => ({
+        ...unit,
+        modifier: densityModifiers[i],
+        originalIndex: i,
+      }))
+      .filter((u) => u.center); // Chỉ xử lý các ô có tọa độ
+
+    // 2. Sắp xếp theo modifier giảm dần để tìm các điểm nóng
+    unitsWithModifiers.sort((a, b) => b.modifier - a.modifier);
+
+    const suppressedIndices = new Set();
+    // 3. Duyệt qua các điểm nóng, nếu có điểm nóng khác (yếu hơn) ở quá gần, giảm giá trị của nó
+    for (let i = 0; i < unitsWithModifiers.length; i++) {
+      const hotUnit = unitsWithModifiers[i];
+      // Bỏ qua nếu điểm này đã bị triệt tiêu bởi một điểm nóng hơn
+      if (suppressedIndices.has(hotUnit.originalIndex)) continue;
+
+      for (let j = i + 1; j < unitsWithModifiers.length; j++) {
+        const otherUnit = unitsWithModifiers[j];
+        if (suppressedIndices.has(otherUnit.originalIndex)) continue;
+
+        // Tính khoảng cách
+        const dist = haversine(
+          hotUnit.center.lat,
+          hotUnit.center.lng,
+          otherUnit.center.lat,
+          otherUnit.center.lng,
+        );
+
+        // Nếu quá gần, triệt tiêu điểm nóng yếu hơn
+        if (dist < MIN_HOTSPOT_DISTANCE_KM) {
+          densityModifiers[otherUnit.originalIndex] *= 0.1; // Giảm mạnh giá trị
+          suppressedIndices.add(otherUnit.originalIndex);
+        }
+      }
+    }
+  }
 
   const rawWeights = areas.map((a, i) => (a || 1) * densityModifiers[i]);
   const totalRawWeight = rawWeights.reduce((s, w) => s + w, 0);
@@ -643,20 +704,26 @@ function constrainedWeightedSplit(
   return ints;
 }
 
-/** Lấy diện tích (area_km2) của một danh sách unitId từ layer GeoJSON đang hiển thị */
-function getUnitAreas(ids) {
-  const areaMap = {};
+/** Lấy chi tiết (diện tích, tâm) của một danh sách unitId từ layer GeoJSON đang hiển thị */
+function getUnitDetails(ids) {
+  const detailsMap = {};
   if (window.geoJsonLayer) {
     window.geoJsonLayer.eachLayer((layer) => {
       const f = layer.feature;
       if (!f) return;
       const uid = f.id || f.properties?.id;
       if (uid !== undefined && ids.includes(parseInt(uid))) {
-        areaMap[parseInt(uid)] = parseFloat(f.properties?.area) || 0;
+        const bounds = L.geoJSON(f.geometry).getBounds();
+        detailsMap[parseInt(uid)] = {
+          id: parseInt(uid),
+          area: parseFloat(f.properties?.area) || 0,
+          center: bounds.getCenter(), // Leaflet LatLng object {lat, lng}
+        };
       }
     });
   }
-  return ids.map((id) => areaMap[id] || 0);
+  // Trả về theo đúng thứ tự của ids, điền object rỗng nếu không tìm thấy
+  return ids.map((id) => detailsMap[id] || { id: id, area: 0, center: null });
 }
 
 /** Phân bổ tổng khách + tổng đơn có ràng buộc min/max cho các ô đã chọn */
@@ -753,8 +820,9 @@ window.bulkRandomDistribute = async function () {
     maxPct,
   } = formValues;
 
-  // Lấy diện tích từ layer GeoJSON đang tải trên bản đồ
-  const areas = getUnitAreas(selected);
+  // Lấy chi tiết (diện tích, tâm) từ layer GeoJSON
+  const unitDetails = getUnitDetails(selected);
+  const areas = unitDetails.map((d) => d.area);
   const hasAreaData = areas.some((a) => a > 0);
 
   let customerSplit, orderSplit;
@@ -768,6 +836,7 @@ window.bulkRandomDistribute = async function () {
       minPct,
       maxPct,
       20,
+      unitDetails,
     );
   } else {
     // Fallback: không có data diện tích, dùng randomSplit với clamp
@@ -778,6 +847,7 @@ window.bulkRandomDistribute = async function () {
       minPct,
       maxPct,
       30,
+      unitDetails,
     );
   }
 

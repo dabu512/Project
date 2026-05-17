@@ -1437,67 +1437,138 @@ body.sidebar-open .leaflet-control-container .leaflet-top.leaflet-left {
 
 /* ===== Polygon Sort UI Styling ===== */
 .polygon-sort-container {
-  padding: 10px 25px;
+  padding: 10px 15px;
   border-bottom: 1px solid #eee;
   background: #fafbfc;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.btn-sort-toggle {
-  background: white;
-  border: 1px solid #ddd;
-  padding: 10px 15px;
-  border-radius: 8px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: #2c3e50;
-  cursor: pointer;
-  width: 100%;
-  display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
 }
 
-.btn-sort-toggle:hover {
+.sort-static-label {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sort-static-label i {
+  color: var(--accent);
+}
+
+.sort-button-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  transition: all 0.2s ease;
+  width: auto;
+  flex-shrink: 0;
+}
+
+.sort-button-group:hover {
   border-color: var(--accent);
-  background: #fdfdfd;
   box-shadow: 0 2px 8px rgba(52, 152, 219, 0.1);
 }
 
-.btn-sort-toggle .sort-badge {
-  background: #e1f5fe;
-  color: #039be5;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 12px;
-  margin-left: auto;
-  margin-right: 10px;
-  border: 1px solid #b3e5fc;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+.sort-dropdown-btn {
+  background: transparent;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 24px 0 0 24px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #2c3e50;
+  cursor: pointer;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: nowrap;
 }
 
-.btn-sort-toggle .caret-icon {
-  transition: transform 0.3s ease;
+.sort-dropdown-btn:hover {
+  background: #f8f9fa;
+}
+
+.sort-dropdown-btn .caret-icon {
   color: #95a5a6;
+  transition: transform 0.3s ease;
 }
 
-.btn-sort-toggle.open .caret-icon {
+.sort-dropdown-btn.open .caret-icon {
   transform: rotate(180deg);
 }
 
-.sort-options-list {
+.sort-divider {
+  width: 1px;
+  height: 20px;
+  background-color: #eee;
+}
+
+.sort-direction-btn {
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 0 24px 24px 0;
+  cursor: pointer;
+  color: #555;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sort-direction-btn:hover {
+  background: #f8f9fa;
+  color: var(--accent);
+}
+
+.sort-direction-btn .direction-icon {
+  font-size: 11px;
+  transition: transform 0.3s ease;
+}
+
+.sort-direction-btn.asc .direction-icon {
+  transform: rotate(180deg);
+}
+
+/* Dropdown Menu */
+.sort-options-dropdown {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  left: auto;
+  min-width: 220px;
+  width: max-content;
+  background: white;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.08);
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 5px 0 0 0;
-  border-top: 1px dashed #eee;
-  margin-top: 2px;
+  padding: 6px;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-10px);
+  transition: all 0.2s ease;
+}
+
+.sort-options-dropdown.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 
 .sort-option-btn {

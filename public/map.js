@@ -1089,6 +1089,21 @@ if (currentUser) {
                             }
 
                             // 3. Hiện panel thông tin bình thường
+                            // Không hiện khi đang vẽ công cụ admin
+                            const isDrawing = map.pm && map.pm.globalDrawModeEnabled && map.pm.globalDrawModeEnabled();
+                            // Không hiện khi click được kích hoạt từ thẻ card (không phải click thực trên bản đồ)
+                            const isCardClick = window._cardTriggeredClick === true;
+                            window._cardTriggeredClick = false;
+
+                            if (isDrawing || isCardClick) return;
+
+                            // Toggle: Bấm lại vào ô đang chọn → bỏ chọn + ẩn panel
+                            if (window.currentSelectedLayer === l) {
+                                window.clearSelectedPolygon();
+                                document.getElementById('unit-info-panel').classList.remove('visible');
+                                return;
+                            }
+
                             const currentProps = f.properties;
                             currentProps.id = unitId;
                             updateSidebarStats(currentProps);

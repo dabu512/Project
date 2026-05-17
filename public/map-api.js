@@ -154,12 +154,15 @@ window.districtEvals = {};
 // Chế độ chọn đa giác để gộp/xóa
 window.toggleBulkMode = function () {
   window.isBulkSelectMode = true;
-  window.selectedUnitsList = [];
+
+  // Đọc các checkbox đã tick sẵn trong danh sách thẻ
+  const checkedBoxes = Array.from(document.querySelectorAll(".dist-checkbox:checked"));
+  window.selectedUnitsList = checkedBoxes.map((cb) => parseInt(cb.value));
 
   // Đổi hiển thị nút
   document.getElementById("toggle-bulk-mode-btn").classList.add("active");
   document.getElementById("bulk-action-panel").style.display = "flex";
-  document.getElementById("bulk-count").innerText = "0";
+  document.getElementById("bulk-count").innerText = window.selectedUnitsList.length;
 
   Swal.fire({
     toast: true,
@@ -227,7 +230,7 @@ window.renderDistrictManagementList = async function (units) {
   const sortContainer = document.getElementById("polygon-sort-container");
   if (sortContainer) {
     if (units && units.length > 0) {
-      sortContainer.style.display = "block";
+      sortContainer.style.display = "flex";
     } else {
       sortContainer.style.display = "none";
     }
@@ -240,21 +243,46 @@ window.renderDistrictManagementList = async function (units) {
     window.originalUnitIdsOrder = [];
   }
 
-  // Reset trạng thái sắp xếp khi render danh sách mới (VD: chuyển tỉnh/version)
-  window.currentSortType = 'default';
+  // Đọc trạng thái đã lưu, nếu không có thì mặc định
+  const savedSortType = localStorage.getItem('polygonSortType') || 'default';
+  const savedSortDirection = localStorage.getItem('polygonSortDirection') || 'desc';
+
+  window.currentSortType = savedSortType;
+  window.currentSortDirection = savedSortDirection;
+
   document.querySelectorAll('.sort-option-btn').forEach(btn => {
-    if (btn.getAttribute('data-sort') === 'default') {
+    if (btn.getAttribute('data-sort') === savedSortType) {
       btn.classList.add('active');
     } else {
       btn.classList.remove('active');
     }
   });
-  const badge = document.getElementById('current-sort-label');
-  if (badge) badge.innerText = 'Mặc định';
+
+  const label = document.getElementById('current-sort-label');
+  if (label) {
+    let text = `<i class="fa-solid fa-arrows-alt-v"></i> Mặc định (Ban đầu)`;
+    if (savedSortType === "name") text = `<i class="fa-solid fa-signature"></i> Tên đa giác`;
+    else if (savedSortType === "orders") text = `<i class="fa-solid fa-box"></i> Số lượng đơn hàng`;
+    else if (savedSortType === "customers") text = `<i class="fa-solid fa-users"></i> Số lượng khách`;
+    else if (savedSortType === "density") text = `<i class="fa-solid fa-calculator"></i> Mật độ`;
+    label.innerHTML = text;
+  }
+
   const optionsList = document.getElementById('sort-options-list');
   const toggleBtn = document.getElementById('btn-toggle-sort');
-  if (optionsList) optionsList.style.display = 'none';
+  if (optionsList) optionsList.classList.remove('show');
   if (toggleBtn) toggleBtn.classList.remove('open');
+
+  const dirBtn = document.getElementById('btn-sort-direction');
+  if (dirBtn) {
+    if (savedSortDirection === 'asc') {
+      dirBtn.classList.add('asc');
+      dirBtn.setAttribute('title', 'Tăng dần');
+    } else {
+      dirBtn.classList.remove('asc');
+      dirBtn.setAttribute('title', 'Giảm dần');
+    }
+  }
 
   // 1. Render Actions & Dropdown vào header (Thay thế Tabs)
   const actionDiv = document.getElementById("bottom-panel-actions");
@@ -314,20 +342,19 @@ window.renderDistrictManagementList = async function (units) {
   let html = `
         <div class="province-active-content">
             <div class="units-column-container">
-                ${
-                  units && units.length > 0
-                    ? units
-                        .map((u) => {
-                          const color = u.color || "#cccccc";
-                          const customers =
-                            u.customer_count ?? u.customers ?? 0;
-                          const orders = u.order_count ?? u.orders ?? 0;
-                          const density = customers > 0 ? (orders / customers) : 0;
-                          
-                          // Tránh ký tự nháy kép làm hỏng HTML attribute
-                          const safeName = u.name ? u.name.replace(/"/g, '&quot;') : '';
-                          
-                          return `
+                ${units && units.length > 0
+      ? units
+        .map((u) => {
+          const color = u.color || "#cccccc";
+          const customers =
+            u.customer_count ?? u.customers ?? 0;
+          const orders = u.order_count ?? u.orders ?? 0;
+          const density = customers > 0 ? (orders / customers) : 0;
+
+          // Tránh ký tự nháy kép làm hỏng HTML attribute
+          const safeName = u.name ? u.name.replace(/"/g, '&quot;') : '';
+
+          return `
                         <div class="district-list-item horizontal-card" 
                              data-unit-id="${u.id}"
                              data-name="${safeName}"
@@ -360,56 +387,119 @@ window.renderDistrictManagementList = async function (units) {
                             </div>
                         </div>
                     `;
-                        })
-                        .join("")
-                    : '<p class="empty-msg" style="padding: 20px; width: 100%;">Tỉnh này chưa có ô đa giác nào được tạo.</p>'
-                }
+        })
+        .join("")
+      : '<p class="empty-msg" style="padding: 20px; width: 100%;">Tỉnh này chưa có ô đa giác nào được tạo.</p>'
+    }
             </div>
         </div>
     `;
 
   listDiv.innerHTML = html;
+
+  // Tự động áp dụng sắp xếp sau khi render danh sách xong
+  if (window.currentSortType && window.currentSortType !== 'default') {
+    // setTimeout nhỏ để đảm bảo DOM đã cập nhật xong
+    setTimeout(() => {
+      window.applySort(window.currentSortType);
+    }, 10);
+  }
 };
 
 // ============================================================
 // HÀM ĐIỀU KHIỂN BỘ LỌC SẮP XẾP ĐA GIÁC (DYNAMIC DOM SORTING)
 // ============================================================
 
-window.toggleSortOptions = function () {
+// Đóng menu khi click ra ngoài
+document.addEventListener('click', function (event) {
+  const container = document.getElementById('polygon-sort-container');
+  const dropdown = document.getElementById('sort-options-list');
+  const toggleBtn = document.getElementById('btn-toggle-sort');
+  if (container && dropdown && toggleBtn) {
+    if (!container.contains(event.target)) {
+      dropdown.classList.remove('show');
+      toggleBtn.classList.remove('open');
+    }
+  }
+});
+
+window.currentSortDirection = 'desc'; // Mặc định là giảm dần
+
+window.toggleSortOptions = function (event) {
+  if (event) event.stopPropagation();
   const optionsList = document.getElementById("sort-options-list");
   const toggleBtn = document.getElementById("btn-toggle-sort");
   if (!optionsList || !toggleBtn) return;
 
-  const isOpen = optionsList.style.display !== "none";
+  const isOpen = optionsList.classList.contains("show");
   if (isOpen) {
-    optionsList.style.display = "none";
+    optionsList.classList.remove("show");
     toggleBtn.classList.remove("open");
   } else {
-    optionsList.style.display = "flex";
+    optionsList.classList.add("show");
     toggleBtn.classList.add("open");
   }
 };
 
-window.applySort = function (sortType, element) {
-  window.currentSortType = sortType;
+window.toggleSortDirection = function (event) {
+  if (event) event.stopPropagation();
+  const btn = document.getElementById("btn-sort-direction");
+  if (!btn) return;
 
-  // Cập nhật lớp hoạt động cho các nút sắp xếp
-  document.querySelectorAll(".sort-option-btn").forEach((btn) => {
-    btn.classList.remove("active");
-  });
-  if (element) {
-    element.classList.add("active");
+  if (window.currentSortDirection === 'desc') {
+    window.currentSortDirection = 'asc';
+    btn.classList.add('asc');
+    btn.setAttribute('title', 'Tăng dần');
+  } else {
+    window.currentSortDirection = 'desc';
+    btn.classList.remove('asc');
+    btn.setAttribute('title', 'Giảm dần');
   }
 
-  // Cập nhật text badge hiển thị trạng thái sắp xếp hiện tại
-  const badge = document.getElementById("current-sort-label");
-  if (badge) {
-    let label = "Mặc định";
-    if (sortType === "name") label = "Tên";
-    else if (sortType === "orders") label = "Số đơn";
-    else if (sortType === "customers") label = "Số khách";
-    else if (sortType === "density") label = "Mật độ";
-    badge.innerText = label;
+  localStorage.setItem('polygonSortDirection', window.currentSortDirection);
+
+  // Áp dụng lại kiểu sắp xếp hiện tại với chiều mới
+  if (window.currentSortType && window.currentSortType !== 'default') {
+    window.applySort(window.currentSortType);
+  }
+};
+
+window.applySort = function (sortType, element = null, event = null) {
+  if (event) event.stopPropagation();
+  window.currentSortType = sortType;
+  localStorage.setItem('polygonSortType', sortType);
+
+  // Cập nhật lớp hoạt động cho các nút sắp xếp
+  if (element) {
+    document.querySelectorAll(".sort-option-btn").forEach((btn) => {
+      btn.classList.remove("active");
+    });
+    element.classList.add("active");
+  } else {
+    const activeBtn = document.querySelector(`.sort-option-btn[data-sort="${sortType}"]`);
+    if (activeBtn) {
+      document.querySelectorAll(".sort-option-btn").forEach((btn) => btn.classList.remove("active"));
+      activeBtn.classList.add("active");
+    }
+  }
+
+  // Cập nhật text hiển thị trạng thái sắp xếp hiện tại
+  const label = document.getElementById("current-sort-label");
+  if (label) {
+    let text = `<i class="fa-solid fa-arrows-alt-v"></i> Mặc định (Ban đầu)`;
+    if (sortType === "name") text = `<i class="fa-solid fa-signature"></i> Tên đa giác`;
+    else if (sortType === "orders") text = `<i class="fa-solid fa-box"></i> Số lượng đơn hàng`;
+    else if (sortType === "customers") text = `<i class="fa-solid fa-users"></i> Số lượng khách`;
+    else if (sortType === "density") text = `<i class="fa-solid fa-calculator"></i> Mật độ`;
+    label.innerHTML = text;
+  }
+
+  // Đóng menu thả xuống
+  const optionsList = document.getElementById("sort-options-list");
+  const toggleBtn = document.getElementById("btn-toggle-sort");
+  if (optionsList && toggleBtn) {
+    optionsList.classList.remove("show");
+    toggleBtn.classList.remove("open");
   }
 
   // Lấy container chứa các thẻ card
@@ -419,6 +509,8 @@ window.applySort = function (sortType, element) {
   // Lấy mảng thẻ card thực tế trong DOM
   const cards = Array.from(container.querySelectorAll(".horizontal-card"));
   if (cards.length === 0) return;
+
+  const isAsc = window.currentSortDirection === 'asc';
 
   // Tiến hành sắp xếp mảng các phần tử DOM
   if (sortType === "default") {
@@ -433,25 +525,27 @@ window.applySort = function (sortType, element) {
     cards.sort((a, b) => {
       const nameA = a.getAttribute("data-name") || "";
       const nameB = b.getAttribute("data-name") || "";
-      return nameA.localeCompare(nameB, "vi", { sensitivity: "base" });
+      return isAsc
+        ? nameA.localeCompare(nameB, "vi", { sensitivity: "base" })
+        : nameB.localeCompare(nameA, "vi", { sensitivity: "base" });
     });
   } else if (sortType === "orders") {
     cards.sort((a, b) => {
       const ordersA = parseFloat(a.getAttribute("data-orders")) || 0;
       const ordersB = parseFloat(b.getAttribute("data-orders")) || 0;
-      return ordersB - ordersA; // Giảm dần
+      return isAsc ? ordersA - ordersB : ordersB - ordersA;
     });
   } else if (sortType === "customers") {
     cards.sort((a, b) => {
       const custA = parseFloat(a.getAttribute("data-customers")) || 0;
       const custB = parseFloat(b.getAttribute("data-customers")) || 0;
-      return custB - custA; // Giảm dần
+      return isAsc ? custA - custB : custB - custA;
     });
   } else if (sortType === "density") {
     cards.sort((a, b) => {
       const densA = parseFloat(a.getAttribute("data-density")) || 0;
       const densB = parseFloat(b.getAttribute("data-density")) || 0;
-      return densB - densA; // Giảm dần
+      return isAsc ? densA - densB : densB - densA;
     });
   }
 
@@ -509,13 +603,12 @@ window.highlightPolygonOnMap = function (unitId) {
 
   if (targetLayer) {
     // 1. Zoom đến đa giác (nếu không đang trong tầm nhìn)
-    map.fitBounds(targetLayer.getBounds(), { padding: [50, 50], maxZoom: 16 });
+    map.fitBounds(targetLayer.getBounds(), { padding: [50, 50], maxZoom: 10.5 });
 
-    // 2. Kích hoạt sự kiện click giả lập để hiện panel thông tin
-    // Lưu ý: targetLayer.fire('click') sẽ chạy logic trong map.js
+    // 2. Đánh dấu đây là click từ card (không phải click thực trên bản đồ)
+    //    để map.js biết không hiện panel thông tin
+    window._cardTriggeredClick = true;
     targetLayer.fire("click");
-
-    // 3. Highlight card chính nó (đã có hàm highlightUnitCard gọi từ click event trong map.js)
   }
 };
 
@@ -669,6 +762,12 @@ window.updateCheckAllState = function () {
   const someChecked = Array.from(checkboxes).some((cb) => cb.checked);
   checkAll.checked = allChecked;
   checkAll.indeterminate = someChecked && !allChecked;
+
+  // Đồng bộ bulk-count và selectedUnitsList theo checkbox hiện tại
+  const checkedBoxes = Array.from(document.querySelectorAll(".dist-checkbox:checked"));
+  window.selectedUnitsList = checkedBoxes.map((cb) => parseInt(cb.value));
+  const bulkCount = document.getElementById("bulk-count");
+  if (bulkCount) bulkCount.innerText = window.selectedUnitsList.length;
 };
 
 // ============================================================
@@ -1487,8 +1586,7 @@ window.updateStatsPanel = async function () {
         totalOrders += s.orderCount;
         return `
         <tr>
-          <td><span class="color-indicator" style="background-color: ${
-            s.color
+          <td><span class="color-indicator" style="background-color: ${s.color
           }"></span> Vùng ${idx + 1}</td>
           <td class="stat-value">${s.polygonCount}</td>
           <td class="stat-value">${s.orderCount}</td>

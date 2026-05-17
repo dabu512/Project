@@ -237,27 +237,34 @@
 
         <!-- Bộ lọc sắp xếp đa giác -->
         <div id="polygon-sort-container" class="polygon-sort-container" style="display: none;">
-          <button id="btn-toggle-sort" class="btn-sort-toggle" onclick="window.toggleSortOptions()">
-            <span><i class="fa-solid fa-arrow-down-short-wide"></i> Sắp xếp các ô đa giác</span>
-            <span id="current-sort-label" class="sort-badge">Mặc định</span>
-            <i class="fa-solid fa-chevron-down caret-icon"></i>
-          </button>
-          <div id="sort-options-list" class="sort-options-list" style="display: none;">
-            <button class="sort-option-btn active" data-sort="default" onclick="window.applySort('default', this)">
-              <i class="fa-solid fa-arrows-alt-v"></i> Mặc định (Ban đầu)
+          <span class="sort-static-label"><i class="fa-solid fa-arrow-down-short-wide"></i> Sắp xếp</span>
+          <div class="sort-button-group">
+            <button id="btn-toggle-sort" class="sort-dropdown-btn" onclick="window.toggleSortOptions(event)">
+              <span id="current-sort-label"><i class="fa-solid fa-arrows-alt-v"></i> Mặc định (Ban đầu)</span>
+              <i class="fa-solid fa-chevron-down caret-icon"></i>
             </button>
-            <button class="sort-option-btn" data-sort="name" onclick="window.applySort('name', this)">
-              <i class="fa-solid fa-signature"></i> Theo Tên đa giác
+            <div class="sort-divider"></div>
+            <button id="btn-sort-direction" class="sort-direction-btn" onclick="window.toggleSortDirection(event)" title="Giảm dần">
+              <i class="fa-solid fa-arrow-down-wide-short direction-icon"></i>
             </button>
-            <button class="sort-option-btn" data-sort="orders" onclick="window.applySort('orders', this)">
-              <i class="fa-solid fa-box"></i> Theo Số lượng đơn hàng
-            </button>
-            <button class="sort-option-btn" data-sort="customers" onclick="window.applySort('customers', this)">
-              <i class="fa-solid fa-users"></i> Theo Số lượng khách
-            </button>
-            <button class="sort-option-btn" data-sort="density" onclick="window.applySort('density', this)">
-              <i class="fa-solid fa-calculator"></i> Theo Mật độ (Đơn/Khách)
-            </button>
+            
+            <div id="sort-options-list" class="sort-options-dropdown">
+              <button class="sort-option-btn active" data-sort="default" onclick="window.applySort('default', this, event)">
+                <i class="fa-solid fa-arrows-alt-v"></i> Mặc định (Ban đầu)
+              </button>
+              <button class="sort-option-btn" data-sort="name" onclick="window.applySort('name', this, event)">
+                <i class="fa-solid fa-signature"></i> Theo Tên đa giác
+              </button>
+              <button class="sort-option-btn" data-sort="orders" onclick="window.applySort('orders', this, event)">
+                <i class="fa-solid fa-box"></i> Theo Số lượng đơn hàng
+              </button>
+              <button class="sort-option-btn" data-sort="customers" onclick="window.applySort('customers', this, event)">
+                <i class="fa-solid fa-users"></i> Theo Số lượng khách
+              </button>
+              <button class="sort-option-btn" data-sort="density" onclick="window.applySort('density', this, event)">
+                <i class="fa-solid fa-calculator"></i> Theo Mật độ (Đơn/Khách)
+              </button>
+            </div>
           </div>
         </div>
 

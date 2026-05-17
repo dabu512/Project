@@ -198,14 +198,21 @@ window.renderDistrictManagementList = async function (units) {
   const listDiv = document.getElementById("district-management-list");
   if (!listDiv) return;
 
-  // Lấy danh sách tất cả các tỉnh để hiển thị thanh chọn (Tabs)
+  // Lấy danh sách tất cả các tỉnh (sử dụng Cache nếu có để tối ưu tốc độ)
   let provinces = [];
-  try {
-    const res = await fetch("/api/hierarchy/provinces");
-    const data = await res.json();
-    if (data.success) provinces = data.data;
-  } catch (e) {
-    console.error("Lỗi tải tỉnh cho sidebar", e);
+  if (window.provincesCache) {
+    provinces = window.provincesCache;
+  } else {
+    try {
+      const res = await fetch("/api/hierarchy/provinces");
+      const data = await res.json();
+      if (data.success) {
+        window.provincesCache = data.data;
+        provinces = data.data;
+      }
+    } catch (e) {
+      console.error("Lỗi tải tỉnh cho sidebar", e);
+    }
   }
 
   if (provinces.length === 0) {
@@ -215,6 +222,39 @@ window.renderDistrictManagementList = async function (units) {
   }
 
   const currentProvinceId = document.getElementById("province-select")?.value;
+
+  // Cấu hình hiển thị / ẩn cho bộ lọc sắp xếp đa giác
+  const sortContainer = document.getElementById("polygon-sort-container");
+  if (sortContainer) {
+    if (units && units.length > 0) {
+      sortContainer.style.display = "block";
+    } else {
+      sortContainer.style.display = "none";
+    }
+  }
+
+  // Khởi tạo thứ tự ID gốc để có thể quay lại "Mặc định" bất kỳ lúc nào
+  if (units && units.length > 0) {
+    window.originalUnitIdsOrder = units.map(u => u.id);
+  } else {
+    window.originalUnitIdsOrder = [];
+  }
+
+  // Reset trạng thái sắp xếp khi render danh sách mới (VD: chuyển tỉnh/version)
+  window.currentSortType = 'default';
+  document.querySelectorAll('.sort-option-btn').forEach(btn => {
+    if (btn.getAttribute('data-sort') === 'default') {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  const badge = document.getElementById('current-sort-label');
+  if (badge) badge.innerText = 'Mặc định';
+  const optionsList = document.getElementById('sort-options-list');
+  const toggleBtn = document.getElementById('btn-toggle-sort');
+  if (optionsList) optionsList.style.display = 'none';
+  if (toggleBtn) toggleBtn.classList.remove('open');
 
   // 1. Render Actions & Dropdown vào header (Thay thế Tabs)
   const actionDiv = document.getElementById("bottom-panel-actions");
@@ -282,8 +322,19 @@ window.renderDistrictManagementList = async function (units) {
                           const customers =
                             u.customer_count ?? u.customers ?? 0;
                           const orders = u.order_count ?? u.orders ?? 0;
+                          const density = customers > 0 ? (orders / customers) : 0;
+                          
+                          // Tránh ký tự nháy kép làm hỏng HTML attribute
+                          const safeName = u.name ? u.name.replace(/"/g, '&quot;') : '';
+                          
                           return `
-                        <div class="district-list-item horizontal-card" data-unit-id="${u.id}" onclick="window.highlightPolygonOnMap(${u.id})">
+                        <div class="district-list-item horizontal-card" 
+                             data-unit-id="${u.id}"
+                             data-name="${safeName}"
+                             data-orders="${orders}"
+                             data-customers="${customers}"
+                             data-density="${density}"
+                             onclick="window.highlightPolygonOnMap(${u.id})">
                             <div class="district-info">
                                 <input type="checkbox" class="dist-checkbox" value="${u.id}" style="width: 18px; height: 18px; cursor:pointer;" onchange="window.updateCheckAllState()">
                                 <div class="district-color-box" style="background-color: ${color}; width: 24px; height: 24px; border-radius: 4px; flex-shrink:0;"></div>
@@ -318,6 +369,94 @@ window.renderDistrictManagementList = async function (units) {
     `;
 
   listDiv.innerHTML = html;
+};
+
+// ============================================================
+// HÀM ĐIỀU KHIỂN BỘ LỌC SẮP XẾP ĐA GIÁC (DYNAMIC DOM SORTING)
+// ============================================================
+
+window.toggleSortOptions = function () {
+  const optionsList = document.getElementById("sort-options-list");
+  const toggleBtn = document.getElementById("btn-toggle-sort");
+  if (!optionsList || !toggleBtn) return;
+
+  const isOpen = optionsList.style.display !== "none";
+  if (isOpen) {
+    optionsList.style.display = "none";
+    toggleBtn.classList.remove("open");
+  } else {
+    optionsList.style.display = "flex";
+    toggleBtn.classList.add("open");
+  }
+};
+
+window.applySort = function (sortType, element) {
+  window.currentSortType = sortType;
+
+  // Cập nhật lớp hoạt động cho các nút sắp xếp
+  document.querySelectorAll(".sort-option-btn").forEach((btn) => {
+    btn.classList.remove("active");
+  });
+  if (element) {
+    element.classList.add("active");
+  }
+
+  // Cập nhật text badge hiển thị trạng thái sắp xếp hiện tại
+  const badge = document.getElementById("current-sort-label");
+  if (badge) {
+    let label = "Mặc định";
+    if (sortType === "name") label = "Tên";
+    else if (sortType === "orders") label = "Số đơn";
+    else if (sortType === "customers") label = "Số khách";
+    else if (sortType === "density") label = "Mật độ";
+    badge.innerText = label;
+  }
+
+  // Lấy container chứa các thẻ card
+  const container = document.querySelector(".units-column-container");
+  if (!container) return;
+
+  // Lấy mảng thẻ card thực tế trong DOM
+  const cards = Array.from(container.querySelectorAll(".horizontal-card"));
+  if (cards.length === 0) return;
+
+  // Tiến hành sắp xếp mảng các phần tử DOM
+  if (sortType === "default") {
+    cards.sort((a, b) => {
+      const idA = parseInt(a.getAttribute("data-unit-id"));
+      const idB = parseInt(b.getAttribute("data-unit-id"));
+      const idxA = window.originalUnitIdsOrder ? window.originalUnitIdsOrder.indexOf(idA) : 0;
+      const idxB = window.originalUnitIdsOrder ? window.originalUnitIdsOrder.indexOf(idB) : 0;
+      return idxA - idxB;
+    });
+  } else if (sortType === "name") {
+    cards.sort((a, b) => {
+      const nameA = a.getAttribute("data-name") || "";
+      const nameB = b.getAttribute("data-name") || "";
+      return nameA.localeCompare(nameB, "vi", { sensitivity: "base" });
+    });
+  } else if (sortType === "orders") {
+    cards.sort((a, b) => {
+      const ordersA = parseFloat(a.getAttribute("data-orders")) || 0;
+      const ordersB = parseFloat(b.getAttribute("data-orders")) || 0;
+      return ordersB - ordersA; // Giảm dần
+    });
+  } else if (sortType === "customers") {
+    cards.sort((a, b) => {
+      const custA = parseFloat(a.getAttribute("data-customers")) || 0;
+      const custB = parseFloat(b.getAttribute("data-customers")) || 0;
+      return custB - custA; // Giảm dần
+    });
+  } else if (sortType === "density") {
+    cards.sort((a, b) => {
+      const densA = parseFloat(a.getAttribute("data-density")) || 0;
+      const densB = parseFloat(b.getAttribute("data-density")) || 0;
+      return densB - densA; // Giảm dần
+    });
+  }
+
+  // Đưa các thẻ đã sắp xếp trở lại container để cập nhật vị trí lập tức
+  cards.forEach((card) => container.appendChild(card));
 };
 
 /**

@@ -211,7 +211,7 @@ async function runGRASP(versionId, config) {
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
     // Đã thay đổi hệ số cân bằng cố định là 0.5 theo yêu cầu
-    const lambda = 0.5;
+    const lambda = 0.7;
 
     // 1a. Chọn seeds (ngẫu nhiên từ top-degree, rải đều)
     let sortedByDegree = [...units].sort(
@@ -248,20 +248,58 @@ async function runGRASP(versionId, config) {
       center: { cy: unitMap[sid].cy, cx: unitMap[sid].cx },
     }));
 
-    // 1c. Gán ô còn lại - Round-robin (vùng ít ô nhất mở rộng trước)
+    // 1c. Round-robin Voronoi-like expansion
+    // Mỗi vòng: sắp xếp vùng theo kích thước tăng dần, vùng nhỏ mở rộng trước.
+    // Mỗi vùng chọn 1 ô biên GẦN TÂM NHẤT (thông qua RCL cục bộ).
+    // Giúp các vùng phát triển tròn trịa kiểu Voronoi, không đâm xuyên vào nhau.
     while (assigned.size < units.length) {
-      let expandable = [];
-      for (let i = 0; i < p; i++) {
-        const cands = getBorderCandidates(
-          territories[i].units,
-          adjList,
-          assigned,
-        );
-        if (cands.length > 0) expandable.push({ idx: i, candidates: cands });
+      // Sắp xếp vùng theo kích thước (ít ô → nhiều ô) để cân bằng tốc độ mở rộng
+      let order = Array.from({ length: p }, (_, i) => i);
+      order.sort((a, b) => territories[a].units.length - territories[b].units.length);
+
+      let addedAny = false;
+
+      for (const idx of order) {
+        const cands = getBorderCandidates(territories[idx].units, adjList, assigned);
+        if (cands.length === 0) continue;
+
+        const t = territories[idx];
+
+        // Score mỗi candidate: lambda * phân_tán (MSE) + (1-lambda) * độ_lệch_cân_bằng
+        let scored = [];
+        let scoreMin = Infinity, scoreMax = -Infinity;
+
+        for (const cid of cands) {
+          const u = unitMap[cid];
+          let distSq = getDistToCenterSq(cid, t.center);
+          let newCust = t.customers + u.customer_count;
+          // Chuẩn hoá f_disp và f_dev về cùng một thang đo (tương đối [0, 1])
+          // Lấy căn bậc 2 của distSq / d_max^2 để khoảng cách tuyến tính hơn, tăng độ nhạy
+          let f_disp = globalMaxDist > 0 ? Math.sqrt(distSq) / globalMaxDist : 0;
+          let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
+
+          let score = lambda * f_disp + (1 - lambda) * f_dev;
+          scored.push({ id: cid, score });
+          if (score < scoreMin) scoreMin = score;
+          if (score > scoreMax) scoreMax = score;
+        }
+
+        // Tạo RCL cục bộ (chỉ trong các ứng viên của Vùng này)
+        let threshold = scoreMin + alpha * (scoreMax - scoreMin);
+        let rcl = scored.filter(v => v.score <= threshold);
+        if (rcl.length === 0) rcl = [scored.reduce((a, b) => a.score < b.score ? a : b)];
+
+        let chosen = rcl[Math.floor(Math.random() * rcl.length)];
+
+        t.units.push(chosen.id);
+        t.customers += unitMap[chosen.id].customer_count;
+        t.center = computeCenter(t.units);
+        assigned.add(chosen.id);
+        addedAny = true;
       }
 
-      if (expandable.length === 0) {
-        // Xử lý ô cô lập bằng BFS
+      if (!addedAny) {
+        // Xử lý ô cô lập bằng BFS nếu bị kẹt
         let unassignedIds = units
           .filter((u) => !assigned.has(u.id))
           .map((u) => u.id);
@@ -276,7 +314,7 @@ async function runGRASP(versionId, config) {
                 bfsVisited.add(nb);
                 if (assigned.has(nb)) {
                   for (let ti = 0; ti < p; ti++) {
-                    if (territories[ti].units.includes(nb)) {
+                    if (territories[ti].units.some(id => String(id) === String(nb))) {
                       foundT = ti;
                       break;
                     }
@@ -298,54 +336,12 @@ async function runGRASP(versionId, config) {
             }
           }
           territories[foundT].units.push(orphanId);
-          territories[foundT].customers +=
-            unitMap[orphanId].customer_count || 0;
+          territories[foundT].customers += unitMap[orphanId].customer_count;
           territories[foundT].center = computeCenter(territories[foundT].units);
           assigned.add(orphanId);
         }
         break;
       }
-
-      // Đánh giá TẤT CẢ các ứng viên từ TẤT CẢ các vùng (Global RCL)
-      let phiVals = [];
-      let phiMin = Infinity,
-        phiMax = -Infinity;
-
-      for (const { idx, candidates } of expandable) {
-        let t = territories[idx];
-        for (const j of candidates) {
-          let u = unitMap[j];
-          // Tính center mới (medoid) cho V_t* ∪ {j}
-          let newUnits = [...t.units, j];
-          let hypCenter = computeCenter(newUnits);
-
-          // f_disp(j,t*) = (1/d_max^2) * Σ d_i(c_t*)^2 cho i ∈ V_t* ∪ {j} (chuẩn hoá theo MSE)
-          let sumDist = 0;
-          for (const i of newUnits) sumDist += getDistToCenterSq(i, hypCenter);
-          let f_disp = d_max > 0 ? sumDist / (d_max * d_max) : 0;
-
-          // f_dev(j,t*) = (1/μ) * |w(V_t* ∪ {j}) - μ|
-          let newCust = t.customers + (u.customer_count || 0);
-          let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
-
-          let phi = lambda * f_disp + (1 - lambda) * f_dev;
-          phiVals.push({ id: j, tIdx: idx, phi });
-          if (phi < phiMin) phiMin = phi;
-          if (phi > phiMax) phiMax = phi;
-        }
-      }
-
-      // RCL: {j : φ(j) ∈ [φ_min, φ_min + α(φ_max - φ_min)]}
-      let threshold = phiMin + alpha * (phiMax - phiMin);
-      let rcl = phiVals.filter((v) => v.phi <= threshold);
-      if (rcl.length === 0) rcl = phiVals;
-      let chosen = rcl[Math.floor(Math.random() * rcl.length)];
-
-      let targetT = territories[chosen.tIdx];
-      targetT.units.push(chosen.id);
-      targetT.customers += unitMap[chosen.id].customer_count || 0;
-      targetT.center = computeCenter(targetT.units);
-      assigned.add(chosen.id);
     }
 
     // 1d. Sửa chữa tính liên thông
@@ -540,6 +536,8 @@ async function runGRASP(versionId, config) {
   let totalLsMoves = 0;
 
   for (let si = 0; si < filtered.length; si++) {
+    const lambda = filtered[si].lambda; // Lấy lambda đã lưu từ pha Construction
+
     // Thay thế JSON.stringify bằng Shallow Copy để tối ưu hiệu suất
     let sol = filtered[si].territories.map(t => ({
       units: [...t.units],
@@ -574,7 +572,6 @@ async function runGRASP(versionId, config) {
     };
 
     let lsMoves = 0;
-    let currentObj = 0; // 0=z1(dispersion), 1=z2(balance)
     let noImproveCycles = 0;
 
     while (lsMoves < MAX_LS_MOVES && noImproveCycles < 4) {
@@ -583,10 +580,12 @@ async function runGRASP(versionId, config) {
       const borderEdges = buildBorderEdges();
 
       let bestMoveEdge = null;
-      let maxImprovement = 0;
+      let maxImprovement = -Infinity; // Khởi tạo âm vô cực để so sánh delta tốt hơn
       let bestMoveData = null;
 
-      // Đánh giá tất cả để tìm Best-Improvement thay vì First-Improvement
+      // Đánh giá tất cả để tìm Best-Improvement dựa trên hàm mục tiêu KẾT HỢP ρ
+      // Việc này giúp mọi bước di chuyển đều phải thoả mãn cải thiện TỔNG THỂ,
+      // không bao giờ hy sinh hoàn toàn độ tròn trịa (compactness) chỉ để lấy 1 chút cân bằng (balance).
       for (const edge of borderEdges) {
         const { nodeId: uid, fromT: i, toT: j } = edge;
         let t = sol[i];
@@ -597,28 +596,33 @@ async function runGRASP(versionId, config) {
         let t1New = t.units.filter((id) => String(id) !== String(uid));
         let t2New = [...t2.units, uid];
 
-        let improvement = 0;
+        // 1. Tính sự thay đổi của độ phân tán (Dispersion - MSE compactness)
+        let oldZ1 = 0, newZ1 = 0;
+        for (const id of t.units) oldZ1 += getDistToCenterSq(id, t.center);
+        for (const id of t2.units) oldZ1 += getDistToCenterSq(id, t2.center);
+        let nc1 = computeCenter(t1New);
+        let nc2 = computeCenter(t2New);
+        for (const id of t1New) newZ1 += getDistToCenterSq(id, nc1);
+        for (const id of t2New) newZ1 += getDistToCenterSq(id, nc2);
 
-        if (currentObj === 0) {
-          // z1: Σ d_j(c_t)^2 cho 2 vùng liên quan phải giảm (tối ưu độ tròn MSE)
-          let oldZ1 = 0, newZ1 = 0;
-          for (const id of t.units) oldZ1 += getDistToCenterSq(id, t.center);
-          for (const id of t2.units) oldZ1 += getDistToCenterSq(id, t2.center);
-          let nc1 = computeCenter(t1New);
-          let nc2 = computeCenter(t2New);
-          for (const id of t1New) newZ1 += getDistToCenterSq(id, nc1);
-          for (const id of t2New) newZ1 += getDistToCenterSq(id, nc2);
-          if (newZ1 < oldZ1) improvement = oldZ1 - newZ1;
-        } else {
-          // z2: (1/μ) * max_t |w(V_t) - μ| phải giảm
-          let oldDev = Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
-          let newDev = Math.abs(t.customers - uCust - mu1) + Math.abs(t2.customers + uCust - mu1);
-          if (newDev < oldDev) improvement = oldDev - newDev;
-        }
+        // Tính toán khoảng cách tuyến tính trung bình (RMS) thay vì tổng bình phương
+        // để dispDelta có cùng độ lớn đại số (magnitude) với balDelta
+        let dispDelta = globalMaxDist > 0 ? (Math.sqrt(newZ1) - Math.sqrt(oldZ1)) / globalMaxDist : 0;
 
-        if (improvement > maxImprovement) {
+        // 2. Tính sự thay đổi của độ lệch cân bằng (Balance deviation)
+        let oldDev = Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
+        let newDev = Math.abs(t.customers - uCust - mu1) + Math.abs(t2.customers + uCust - mu1);
+
+        // Chia cho mu1 * 2 thay vì mu1 * p vì ta chỉ quan tâm delta giữa 2 vùng đang xét
+        let balDelta = mu1 > 0 ? (newDev - oldDev) / (mu1 * 2) : 0;
+
+        // 3. Kết hợp lại thành sự thay đổi của ρ (rhoDelta)
+        // Nếu rhoDelta < 0 nghĩa là giải pháp MỚI tốt hơn (ρ giảm)
+        let rhoDelta = lambda * dispDelta + (1 - lambda) * balDelta;
+        let improvement = -rhoDelta; // Cải thiện dương nghĩa là ρ giảm
+
+        if (improvement > 0 && improvement > maxImprovement) {
           // Connectivity check: Sau khi bỏ uid, territory nguồn vẫn liên thông?
-          // Chỉ kiểm tra khi có improvement tốt hơn để tránh tốn thời gian
           let connected = true;
           if (t.units.length > 2) {
             let remainSet = new Set(t1New);
@@ -666,7 +670,6 @@ async function runGRASP(versionId, config) {
 
       if (!improved) {
         noImproveCycles++;
-        currentObj = (currentObj + 1) % 2; // Chuyển objective (relinked)
       } else {
         noImproveCycles = 0;
       }

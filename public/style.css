@@ -1434,3 +1434,111 @@ body.sidebar-open .leaflet-control-container .leaflet-top.leaflet-left {
   font-weight: 800;
   color: var(--accent);
 }
+
+/* ===== Polygon Sort UI Styling ===== */
+.polygon-sort-container {
+  padding: 10px 25px;
+  border-bottom: 1px solid #eee;
+  background: #fafbfc;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-sort-toggle {
+  background: white;
+  border: 1px solid #ddd;
+  padding: 10px 15px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #2c3e50;
+  cursor: pointer;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
+
+.btn-sort-toggle:hover {
+  border-color: var(--accent);
+  background: #fdfdfd;
+  box-shadow: 0 2px 8px rgba(52, 152, 219, 0.1);
+}
+
+.btn-sort-toggle .sort-badge {
+  background: #e1f5fe;
+  color: #039be5;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 12px;
+  margin-left: auto;
+  margin-right: 10px;
+  border: 1px solid #b3e5fc;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn-sort-toggle .caret-icon {
+  transition: transform 0.3s ease;
+  color: #95a5a6;
+}
+
+.btn-sort-toggle.open .caret-icon {
+  transform: rotate(180deg);
+}
+
+.sort-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px 0 0 0;
+  border-top: 1px dashed #eee;
+  margin-top: 2px;
+}
+
+.sort-option-btn {
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #555;
+  text-align: left;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.sort-option-btn i {
+  color: #95a5a6;
+  width: 16px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.sort-option-btn:hover {
+  background: #f1f7ff;
+  color: var(--accent);
+}
+
+.sort-option-btn:hover i {
+  color: var(--accent);
+}
+
+.sort-option-btn.active {
+  background: #e8f4fd;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.sort-option-btn.active i {
+  color: var(--accent);
+}

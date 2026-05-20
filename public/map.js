@@ -1095,7 +1095,20 @@ if (currentUser) {
                             const isCardClick = window._cardTriggeredClick === true;
                             window._cardTriggeredClick = false;
 
-                            if (isDrawing || isCardClick) return;
+                            if (isDrawing) return;
+
+                            if (isCardClick) {
+                                // Vẫn highlight viền vàng khi click từ card
+                                if (window.currentSelectedLayer === l) {
+                                    window.clearSelectedPolygon();
+                                    return;
+                                }
+                                window.clearSelectedPolygon();          // Xóa highlight cũ
+                                const selEl = l.getElement();
+                                if (selEl) selEl.classList.add('polygon-selected');
+                                window.currentSelectedLayer = l;        // Lưu lại để reset sau
+                                return;
+                            }
 
                             // Toggle: Bấm lại vào ô đang chọn → bỏ chọn + ẩn panel
                             if (window.currentSelectedLayer === l) {

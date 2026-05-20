@@ -5,12 +5,14 @@ const hierarchyRoutes = require("../routes/hierarchy");
 const unitRoutes = require("../routes/units");
 const driverRoutes = require("../routes/driver");
 const optimizationRoutes = require("../routes/optimization");
+const { autoDumpMiddleware } = require("./autoDump");
 
 const path = require("path");
 const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../public")));
+app.use(autoDumpMiddleware);
 
 // Route mặc định để phục vụ file index.html
 app.get("/", (req, res) => {

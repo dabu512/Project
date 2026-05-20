@@ -2,11 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict JSudmYKZwvboLJHtX9XdB7YCR0CyzXanVMh4A3FlWGmGeRoWyWbBMoDgYhgr7Ew
-
--- Dumped from database version 18.3
--- Dumped by pg_dump version 18.3
-
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
@@ -20,542 +15,27 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 --
--- Name: postgis; Type: EXTENSION; Schema: -; Owner: -
+-- Name: postgis; Type: EXTENSION; Schema: -
 --
 
 CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
 
-
---
--- Name: EXTENSION postgis; Type: COMMENT; Schema: -; Owner: 
---
-
-COMMENT ON EXTENSION postgis IS 'PostGIS geometry and geography spatial types and functions';
-
-
---
--- Name: check_no_overlap(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.check_no_overlap() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 FROM basic_units 
-        WHERE ST_Intersects(geom, NEW.geom) 
-        AND id != NEW.id 
-        AND ST_Area(ST_Intersection(geom, NEW.geom)) > (ST_Area(NEW.geom) * 0.1)
-    ) THEN
-        RAISE EXCEPTION 'Lỗi: Ô này đang bị chồng lấn quá nhiều lên ô khác!';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.check_no_overlap() OWNER TO postgres;
-
---
--- Name: fn_auto_calculate_bu(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.fn_auto_calculate_bu() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    -- 1. Tự động tính Tâm (Centroid)
-    NEW.centroid := ST_Centroid(NEW.geom);
-    
-    -- 2. Tự động tính Diện tích (Chuyển sang hệ mét 3857 rồi chia 1 triệu để ra km2)
-    NEW.area_km2 := ST_Area(ST_Transform(NEW.geom, 3857)) / 1000000;
-    
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.fn_auto_calculate_bu() OWNER TO postgres;
-
---
--- Name: fn_update_bu_metadata(); Type: FUNCTION; Schema: public; Owner: postgres
---
-
-CREATE FUNCTION public.fn_update_bu_metadata() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    NEW.centroid := ST_Centroid(NEW.geom);
-    NEW.area_km2 := ST_Area(ST_Transform(NEW.geom, 3857)) / 1000000; -- Tính diện tích ra km2
-    RETURN NEW;
-END;
-$$;
-
-
-ALTER FUNCTION public.fn_update_bu_metadata() OWNER TO postgres;
-
-SET default_tablespace = '';
-
-SET default_table_access_method = heap;
-
---
--- Name: basic_units; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.basic_units (
-    id integer NOT NULL,
-    name character varying(100),
-    geom public.geometry(Polygon,4326),
-    customer_count integer DEFAULT 0,
-    order_count integer DEFAULT 0,
-    area_km2 double precision,
-    district_id integer,
-    centroid public.geometry(Point,4326),
-    created_by integer,
-    color character varying(20),
-    sales_id integer
-);
-
-
-ALTER TABLE public.basic_units OWNER TO postgres;
-
---
--- Name: basic_units_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-CREATE SEQUENCE public.basic_units_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-ALTER SEQUENCE public.basic_units_id_seq OWNER TO postgres;
-
---
--- Name: basic_units_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
---
-
-ALTER SEQUENCE public.basic_units_id_seq OWNED BY public.basic_units.id;
-
-
---
--- Name: districts; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.districts (
-    id integer NOT NULL,
-    name character varying(100),
-    color character varying(20),
-    driver_id integer,
-    target_orders integer DEFAULT 100,
-    max_load_orders integer DEFAULT 200,
-    user_id integer,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
-);
-
-
-ALTER TABLE public.districts OWNER TO postgres;
-
---
--- Name: districts_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-CREATE SEQUENCE public.districts_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-ALTER SEQUENCE public.districts_id_seq OWNER TO postgres;
-
---
--- Name: districts_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
---
-
-ALTER SEQUENCE public.districts_id_seq OWNED BY public.districts.id;
-
-
---
--- Name: drivers; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.drivers (
-    id integer NOT NULL,
-    name character varying(100) NOT NULL,
-    phone character varying(20),
-    license_plate character varying(20)
-);
-
-
-ALTER TABLE public.drivers OWNER TO postgres;
-
---
--- Name: drivers_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-CREATE SEQUENCE public.drivers_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-ALTER SEQUENCE public.drivers_id_seq OWNER TO postgres;
-
---
--- Name: drivers_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
---
-
-ALTER SEQUENCE public.drivers_id_seq OWNED BY public.drivers.id;
-
-
---
--- Name: users; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.users (
-    id integer NOT NULL,
-    username character varying(50) NOT NULL,
-    password character varying(255) NOT NULL,
-    full_name character varying(100),
-    role character varying(20) NOT NULL,
-    driver_id integer,
-    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT users_role_check CHECK (((role)::text = ANY ((ARRAY['admin'::character varying, 'sales'::character varying])::text[])))
-);
-
-
-ALTER TABLE public.users OWNER TO postgres;
-
---
--- Name: users_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
---
-
-CREATE SEQUENCE public.users_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-ALTER SEQUENCE public.users_id_seq OWNER TO postgres;
-
---
--- Name: users_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
---
-
-ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
-
-
---
--- Name: v_district_report; Type: VIEW; Schema: public; Owner: postgres
---
-
-CREATE VIEW public.v_district_report AS
-SELECT
-    NULL::integer AS district_id,
-    NULL::character varying(100) AS district_name,
-    NULL::character varying(20) AS color,
-    NULL::character varying(100) AS sales_person,
-    NULL::character varying(100) AS driver_name,
-    NULL::bigint AS total_units,
-    NULL::bigint AS total_customers,
-    NULL::bigint AS total_orders,
-    NULL::integer AS target_orders,
-    NULL::numeric AS completion_rate;
-
-
-ALTER VIEW public.v_district_report OWNER TO postgres;
-
---
--- Name: basic_units id; Type: DEFAULT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.basic_units ALTER COLUMN id SET DEFAULT nextval('public.basic_units_id_seq'::regclass);
-
-
---
--- Name: districts id; Type: DEFAULT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.districts ALTER COLUMN id SET DEFAULT nextval('public.districts_id_seq'::regclass);
-
-
---
--- Name: drivers id; Type: DEFAULT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.drivers ALTER COLUMN id SET DEFAULT nextval('public.drivers_id_seq'::regclass);
-
-
---
--- Name: users id; Type: DEFAULT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
-
-
---
--- Data for Name: basic_units; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.basic_units (id, name, geom, customer_count, order_count, area_km2, district_id, centroid, created_by, color, sales_id) FROM stdin;
-10	Võ Chí Công	0103000020E6100000010000000600000072A774B0FE725A409563B2B8FF1035404969368FC3735A40F10EF0A4850F35402F3196E997745A40A27BD6355A163540328FFCC1C0735A409161156F6416354071C6302768735A40CEC474215613354072A774B0FE725A409563B2B8FF103540	40	30	4.2923185438928435	\N	0101000020E6100000B2EC98A8CC735A403B717A2539133540	\N	#123445	3
-2	Khu vực Mở rộng	0103000020E61000000100000006000000FB21365838735A409A3E3BE0BA0A35407F1475E61E755A40BFB51325210935401B12F758FA745A4090D959F44E0D354045B8C9A832745A40D0807A336A0E354038DC476E4D735A40933655F7C80E3540FB21365838735A409A3E3BE0BA0A3540	20	50	6.21250519621036	4	0101000020E6100000A4BEAC4227745A40C1CC4F820C0C3540	\N	#38a423	3
-1	Khu vực Hoàn Kiếm	0103000020E610000001000000050000001B12F758FA745A4090D959F44E0D3540193BE12538765A40AB984A3FE10C3540D9226937FA755A4006B8205B960F3540B9FE5D9F39755A4005F86EF3C61135401B12F758FA745A4090D959F44E0D3540	15	30	2.901742949001684	3	0101000020E6100000EB86EC528B755A40119BD7A5D00E3540	\N	\N	\N
-9	1	0103000020E610000001000000070000008CDB68006F765A40DFDDCA129D153540D9226937FA755A4006B8205B960F3540B9FE5D9F39755A4005F86EF3C61135406092CA1473755A402A1F82AAD113354026FF93BF7B755A404FB0FF3A3715354022C7D63384755A4091D5AD9E931635408CDB68006F765A40DFDDCA129D153540	1	1	3.944568447730304	3	0101000020E61000004F6FCF21D4755A400F26FE6F5C133540	\N	#46188c	\N
-4	Khu vực Bách Khoa	0103000020E610000001000000050000007F1475E61E755A40BFB5132521093540662FDB4E5B765A407A522635B4093540193BE12538765A40AB984A3FE10C35401B12F758FA745A4090D959F44E0D35407F1475E61E755A40BFB5132521093540	25	45	3.6998078182112857	4	0101000020E6100000C286AB0FA4755A408D8BFEE43E0B3540	\N	#6a294c	\N
-\.
-
-
---
--- Data for Name: districts; Type: TABLE DATA; Schema: public; Owner: postgres
 --
-
-COPY public.districts (id, name, color, driver_id, target_orders, max_load_orders, user_id, updated_at) FROM stdin;
-3	Hoàn Kiếm	#ff0000	\N	100	200	\N	2026-03-20 17:07:06.259537
-1	Vùng Hoàn Kiếm 1	#FF5733	1	100	200	2	2026-03-20 17:07:06.259537
-2	Vùng Hoàn Kiếm 2	#33FF57	2	100	200	3	2026-03-20 17:07:06.259537
-4	Vùng Hai Bà Trưng	#3498db	2	70	160	3	2026-03-20 19:33:02.445389
-\.
-
-
---
--- Data for Name: drivers; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.drivers (id, name, phone, license_plate) FROM stdin;
-1	Nguyễn Văn Tài	0912345678	29A-123.45
-2	Trần Văn Xế	0988888888	30E-999.99
-\.
-
-
---
--- Data for Name: spatial_ref_sys; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.spatial_ref_sys (srid, auth_name, auth_srid, srtext, proj4text) FROM stdin;
-\.
-
-
---
--- Data for Name: users; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.users (id, username, password, full_name, role, driver_id, created_at) FROM stdin;
-4	dabu	123456	Phạm Đức Anh	admin	\N	2026-03-19 01:30:42.292123
-3	sales_xe	123456	Trần Văn Xế	sales	2	2026-03-19 01:29:12.988457
-2	sales_tai	123456	Nguyễn Văn Tài	sales	1	2026-03-19 01:29:12.988457
-1	admin_thanh	123456	Quản trị viên Hệ thống	admin	\N	2026-03-19 01:29:12.988457
-\.
-
-
---
--- Name: basic_units_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.basic_units_id_seq', 15, true);
-
-
---
--- Name: districts_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.districts_id_seq', 4, true);
-
-
---
--- Name: drivers_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.drivers_id_seq', 2, true);
-
-
---
--- Name: users_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.users_id_seq', 4, true);
-
-
---
--- Name: basic_units basic_units_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.basic_units
-    ADD CONSTRAINT basic_units_pkey PRIMARY KEY (id);
-
-
---
--- Name: districts districts_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.districts
-    ADD CONSTRAINT districts_pkey PRIMARY KEY (id);
-
-
---
--- Name: drivers drivers_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.drivers
-    ADD CONSTRAINT drivers_pkey PRIMARY KEY (id);
-
-
---
--- Name: users users_driver_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_driver_id_key UNIQUE (driver_id);
-
-
---
--- Name: users users_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
-
-
+-- Name: check_no_overlap(); Type: FUNCTION
 --
--- Name: users users_username_key; Type: CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_username_key UNIQUE (username);
-
-
---
--- Name: idx_basic_units_centroid; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_basic_units_centroid ON public.basic_units USING gist (centroid);
-
-
---
--- Name: idx_basic_units_geom; Type: INDEX; Schema: public; Owner: postgres
---
-
-CREATE INDEX idx_basic_units_geom ON public.basic_units USING gist (geom);
-
-
---
--- Name: v_district_report _RETURN; Type: RULE; Schema: public; Owner: postgres
---
-
-CREATE OR REPLACE VIEW public.v_district_report AS
- SELECT d.id AS district_id,
-    d.name AS district_name,
-    d.color,
-    u.full_name AS sales_person,
-    dr.name AS driver_name,
-    count(bu.id) AS total_units,
-    sum(bu.customer_count) AS total_customers,
-    sum(bu.order_count) AS total_orders,
-    d.target_orders,
-    round((((sum(bu.order_count))::numeric / (d.target_orders)::numeric) * (100)::numeric), 2) AS completion_rate
-   FROM (((public.districts d
-     LEFT JOIN public.basic_units bu ON ((d.id = bu.district_id)))
-     LEFT JOIN public.users u ON ((d.user_id = u.id)))
-     LEFT JOIN public.drivers dr ON ((d.driver_id = dr.id)))
-  GROUP BY d.id, u.full_name, dr.name;
-
-
---
--- Name: basic_units trg_auto_calculate_bu; Type: TRIGGER; Schema: public; Owner: postgres
---
-
-CREATE TRIGGER trg_auto_calculate_bu BEFORE INSERT OR UPDATE OF geom ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.fn_auto_calculate_bu();
-
-
---
--- Name: basic_units trg_no_overlap; Type: TRIGGER; Schema: public; Owner: postgres
---
-
-CREATE TRIGGER trg_no_overlap BEFORE INSERT OR UPDATE ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.check_no_overlap();
-
-
---
--- Name: basic_units trg_update_bu_metadata; Type: TRIGGER; Schema: public; Owner: postgres
---
-
-CREATE TRIGGER trg_update_bu_metadata BEFORE INSERT OR UPDATE OF geom ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.fn_update_bu_metadata();
-
-
---
--- Name: basic_units fk_created_by; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.basic_units
-    ADD CONSTRAINT fk_created_by FOREIGN KEY (created_by) REFERENCES public.users(id);
-
-
---
--- Name: basic_units fk_district; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.basic_units
-    ADD CONSTRAINT fk_district FOREIGN KEY (district_id) REFERENCES public.districts(id) ON DELETE SET NULL;
-
-
---
--- Name: districts fk_district_user; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.districts
-    ADD CONSTRAINT fk_district_user FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
-
-
---
--- Name: districts fk_driver; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.districts
-    ADD CONSTRAINT fk_driver FOREIGN KEY (driver_id) REFERENCES public.drivers(id) ON DELETE SET NULL;
-
-
---
--- Name: users fk_user_driver; Type: FK CONSTRAINT; Schema: public; Owner: postgres
---
-
-ALTER TABLE ONLY public.users
-    ADD CONSTRAINT fk_user_driver FOREIGN KEY (driver_id) REFERENCES public.drivers(id) ON DELETE SET NULL;
-
-
---
--- PostgreSQL database dump complete
---
-
-\unrestrict JSudmYKZwvboLJHtX9XdB7YCR0CyzXanVMh4A3FlWGmGeRoWyWbBMoDgYhgr7Ew
-
 
---update 8/4
 CREATE OR REPLACE FUNCTION public.check_no_overlap()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+ RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
 BEGIN
-    -- 1. Tự động sửa lỗi hình học (nếu vẽ tay bị chéo nét)
     NEW.geom := ST_MakeValid(NEW.geom);
 
     IF EXISTS (
         SELECT 1 FROM basic_units 
-        WHERE id != COALESCE(NEW.id, -1) -- Tránh lỗi so sánh null khi Insert mới
+        WHERE id != COALESCE(NEW.id, -1)
         AND ST_Intersects(geom, NEW.geom) 
-        -- 2. CHỈ BẮT LỖI NẾU PHẦN ĐÈ NHAU LÀ MỘT MẶT PHẲNG (POLYGON)
         AND ST_GeometryType(ST_Intersection(geom, NEW.geom)) IN ('ST_Polygon', 'ST_MultiPolygon')
-        -- 3. Ngưỡng đè 10% của ông giữ nguyên
         AND ST_Area(ST_Intersection(geom, NEW.geom)) > (ST_Area(NEW.geom) * 0.1)
     ) THEN
         RAISE EXCEPTION 'Lỗi: Ô này đang bị chồng lấn quá 10%% lên ô khác!';
@@ -564,3 +44,919 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+--
+-- Name: fn_auto_calculate_bu(); Type: FUNCTION
+--
+
+CREATE OR REPLACE FUNCTION public.fn_auto_calculate_bu()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+BEGIN
+    NEW.centroid := ST_Centroid(NEW.geom);
+    NEW.area_km2 := ST_Area(ST_Transform(NEW.geom, 3857)) / 1000000;
+    RETURN NEW;
+END;
+$$;
+
+--
+-- Name: fn_update_bu_metadata(); Type: FUNCTION
+--
+
+CREATE OR REPLACE FUNCTION public.fn_update_bu_metadata()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ AS $$
+BEGIN
+    NEW.centroid := ST_Centroid(NEW.geom);
+    NEW.area_km2 := ST_Area(ST_Transform(NEW.geom, 3857)) / 1000000;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TABLE public.regions (
+    id integer NOT NULL,
+    name character varying NOT NULL
+);
+
+CREATE TABLE public.provinces (
+    id integer NOT NULL,
+    name character varying NOT NULL,
+    region_id integer
+);
+
+CREATE TABLE public.versions (
+    id integer NOT NULL,
+    name character varying NOT NULL,
+    province_id integer,
+    status character varying DEFAULT 'draft'::character varying,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    is_optimizing boolean DEFAULT false
+);
+
+CREATE TABLE public.drivers (
+    id integer NOT NULL,
+    name character varying NOT NULL,
+    phone character varying,
+    license_plate character varying
+);
+
+CREATE TABLE public.users (
+    id integer NOT NULL,
+    username character varying NOT NULL,
+    password character varying NOT NULL,
+    full_name character varying,
+    role character varying NOT NULL,
+    driver_id integer,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    province_id integer
+);
+
+CREATE TABLE public.basic_units (
+    id integer NOT NULL,
+    name character varying,
+    geom public.geometry(Polygon,4326),
+    customer_count integer DEFAULT 0,
+    order_count integer DEFAULT 0,
+    area_km2 double precision,
+    centroid public.geometry(Point,4326),
+    created_by integer,
+    color character varying,
+    version_id integer
+);
+
+CREATE TABLE public.unit_adjacencies (
+    unit_a_id integer NOT NULL,
+    unit_b_id integer NOT NULL,
+    version_id integer
+);
+
+CREATE TABLE public.optimization_jobs (
+    id integer NOT NULL,
+    version_id integer NOT NULL,
+    status character varying DEFAULT 'pending'::character varying NOT NULL,
+    progress integer DEFAULT 0,
+    total integer DEFAULT 0,
+    message text,
+    started_at timestamp with time zone,
+    finished_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE SEQUENCE public.regions_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.regions_id_seq OWNED BY public.regions.id;
+ALTER TABLE ONLY public.regions ALTER COLUMN id SET DEFAULT nextval('public.regions_id_seq'::regclass);
+
+CREATE SEQUENCE public.provinces_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.provinces_id_seq OWNED BY public.provinces.id;
+ALTER TABLE ONLY public.provinces ALTER COLUMN id SET DEFAULT nextval('public.provinces_id_seq'::regclass);
+
+CREATE SEQUENCE public.versions_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.versions_id_seq OWNED BY public.versions.id;
+ALTER TABLE ONLY public.versions ALTER COLUMN id SET DEFAULT nextval('public.versions_id_seq'::regclass);
+
+CREATE SEQUENCE public.drivers_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.drivers_id_seq OWNED BY public.drivers.id;
+ALTER TABLE ONLY public.drivers ALTER COLUMN id SET DEFAULT nextval('public.drivers_id_seq'::regclass);
+
+CREATE SEQUENCE public.users_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.users_id_seq OWNED BY public.users.id;
+ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_id_seq'::regclass);
+
+CREATE SEQUENCE public.basic_units_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.basic_units_id_seq OWNED BY public.basic_units.id;
+ALTER TABLE ONLY public.basic_units ALTER COLUMN id SET DEFAULT nextval('public.basic_units_id_seq'::regclass);
+
+CREATE SEQUENCE public.optimization_jobs_id_seq AS integer START WITH 1 INCREMENT BY 1 NO MINVALUE NO MAXVALUE CACHE 1;
+ALTER SEQUENCE public.optimization_jobs_id_seq OWNED BY public.optimization_jobs.id;
+ALTER TABLE ONLY public.optimization_jobs ALTER COLUMN id SET DEFAULT nextval('public.optimization_jobs_id_seq'::regclass);
+
+--
+-- Data for Name: regions; Type: TABLE DATA
+--
+
+INSERT INTO public."regions" (id, name) VALUES (1, 'Toàn quốc');
+
+--
+-- Data for Name: provinces; Type: TABLE DATA
+--
+
+INSERT INTO public."provinces" (id, name, region_id) VALUES (1, 'Hà Nội', 1);
+INSERT INTO public."provinces" (id, name, region_id) VALUES (2, 'Hải Phòng', 1);
+
+--
+-- Data for Name: versions; Type: TABLE DATA
+--
+
+INSERT INTO public."versions" (id, name, province_id, status, created_at, is_optimizing) VALUES (1, 'Initial Status', 1, 'history', '2026-04-12T18:00:08.663Z', false);
+INSERT INTO public."versions" (id, name, province_id, status, created_at, is_optimizing) VALUES (3, 'Ver 1', 2, 'applied', '2026-04-28T10:10:20.590Z', false);
+INSERT INTO public."versions" (id, name, province_id, status, created_at, is_optimizing) VALUES (5, 'HN_ver2', 1, 'applied', '2026-04-29T17:21:08.655Z', false);
+
+--
+-- Data for Name: drivers; Type: TABLE DATA
+--
+
+INSERT INTO public."drivers" (id, name, phone, license_plate) VALUES (1, 'Nguyễn Văn Tài', '0912345678', '29A-123.45');
+INSERT INTO public."drivers" (id, name, phone, license_plate) VALUES (2, 'Trần Văn Xế', '0988888888', '30E-999.99');
+
+--
+-- Data for Name: users; Type: TABLE DATA
+--
+
+INSERT INTO public."users" (id, username, password, full_name, role, driver_id, created_at, province_id) VALUES (1, 'admin_thanh', '123456', 'Quản trị viên Hệ thống', 'admin', NULL, '2026-03-18T18:29:12.988Z', NULL);
+INSERT INTO public."users" (id, username, password, full_name, role, driver_id, created_at, province_id) VALUES (4, 'dabu', '123456', 'Phạm Đức Anh', 'admin', NULL, '2026-03-18T18:30:42.292Z', NULL);
+INSERT INTO public."users" (id, username, password, full_name, role, driver_id, created_at, province_id) VALUES (5, 'tester', 'tester', 'Tester Account', 'driver', NULL, '2026-04-16T17:16:03.714Z', NULL);
+INSERT INTO public."users" (id, username, password, full_name, role, driver_id, created_at, province_id) VALUES (21, 'admin_test', 'admin123', 'Admin Test', 'driver', NULL, '2026-05-17T16:59:43.633Z', NULL);
+INSERT INTO public."users" (id, username, password, full_name, role, driver_id, created_at, province_id) VALUES (22, 'admin_test2', 'admin123', 'Admin Test', 'admin', NULL, '2026-05-17T17:49:09.366Z', NULL);
+
+--
+-- Data for Name: basic_units; Type: TABLE DATA
+--
+
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (74, 'n A', '0103000020E6100000010000000D000000BD35B05582575A4027C0B0FCF9323540147B681F2B565A406E68CA4E3F343540143E5B0707565A40371C96067E3435403961C26856565A4084BD892139393540EDF0D7648D565A403D0FEECEDA393540C5707500C4565A4007EFAB72A13E3540840D4FAF94575A4099F04BFDBC3D3540516859F78F585A40D33252EFA93C3540FEEDB25F77595A405ABDC3EDD03C3540D9D0CDFE40595A407B2DE8BD3138354047AE9B525E595A4000FF942A51323540419AB1683A585A40A2293BFDA0323540BD35B05582575A4027C0B0FCF9323540', 15, 40, 25.071139325946632, '0101000020E61000003FD9164CD8575A409A72195505383540', NULL, '#367be2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (75, 'n B', '0103000020E6100000010000000F000000FEEDB25F77595A405ABDC3EDD03C35400F0A4AD1CA595A40B2BD16F4DE3C3540412E71E4815A5A40605628D2FD3C3540950B957F2D5C5A401F4C8A8F4F403540BA83D899425C5A4005C1E3DBBB3E3540EAE8B81AD95B5A40E065868DB23A35402507EC6AF25B5A40A1D9756F4536354010C99063EB5B5A400B410E4A98353540EAB46E83DA5C5A4076374F75C831354005A8A9656B5B5A40F913950D6B323540D976DA1A115A5A401F9DBAF259323540618BDD3EAB595A406919A9F75432354047AE9B525E595A4000FF942A51323540D9D0CDFE40595A407B2DE8BD31383540FEEDB25F77595A405ABDC3EDD03C3540', 609, 1425, 22.330430284011452, '0101000020E6100000E56D6C9ACC5A5A40F0E970DDFD373540', NULL, '#367be2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (77, 'gg', '0103000020E610000001000000050000004BEA043411965A4047718E3A3A1A3540809D9B36E3925A400B0C59DDEA0535404757E9EE3A995A40DEAD2CD159FE3440D3122BA3919C5A402FDD2406810935404BEA043411965A4047718E3A3A1A3540', 34, 34, 113.9557207126258, '0101000020E6100000B0C405D388975A40F1BC83FBB50A3540', NULL, '#2c0c0c', 3);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (87, 'Big A B A', '0103000020E610000001000000080000003FDE509D73695A401E587CADC5263540CF2EDFFAB06A5A40BED9E6C6F4203540FB57569A946C5A40965F0663442235405AF804CDEA6D5A408022235B6E1D354093C5FD47A66A5A408E942D92761B354009F4544A59695A4057E8E1D6ED1A3540CA89761552685A4093ACC3D1551E35403FDE509D73695A401E587CADC5263540', 4, 5, 25.81895617006527, '0101000020E6100000181B619EB26A5A409484FCC55A1F3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (95, 'Big B A B A', '0103000020E6100000010000000800000078177B717A5E5A405E8EAA68241C3540DD7A4D0F0A5E5A40DB32E02C251F35404DE3195F745F5A40481177C7722535402AF75B6B2A615A400E77A2E2072535406EF7729F1C615A40B9382A37511F35402C03FC8A5D615A40A71B8B1A0A1B3540705B5B785E605A40711DE38A8B1B354078177B717A5E5A405E8EAA68241C3540', 59, 64, 20.24444185836947, '0101000020E61000002ACC4F55DD5F5A402668744912203540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (96, 'Big B A B B', '0103000020E610000001000000080000002AF75B6B2A615A400E77A2E20725354081F872FF4E635A40C9D3F4048224354001BD70E7C2645A40F77475C7621B354045AC47DF99645A407DC599ADDC193540F792C6681D635A40751F80D4261A35402C03FC8A5D615A40A71B8B1A0A1B35406EF7729F1C615A40B9382A37511F35402AF75B6B2A615A400E77A2E207253540', 526, 710, 24.486402723479014, '0101000020E6100000AF5F491CB4625A400FFBC3E4211F3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (101, 'Big A A A B A', '0103000020E61000000100000007000000092643FDAA655A40725312F81426354000E6D1C202675A40915F51A742273540B554DE8E70675A40C34A0515551F354003CAE878F3675A40DD98CEE95A1A3540E78E4A26B1665A40E020EF8FD619354049D6E1E82A665A40A6272CF1801E3540092643FDAA655A40725312F814263540', 19, 54, 13.82751022995956, '0101000020E61000000A67738AC2665A4077BE41AC73203540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (102, 'Big A A A B B', '0103000020E6100000010000000800000000E6D1C202675A40915F51A7422735400F643DB5FA685A4096CB46E7FC2835403FDE509D73695A401E587CADC5263540CA89761552685A4093ACC3D1551E354009F4544A59695A4057E8E1D6ED1A354003CAE878F3675A40DD98CEE95A1A3540B554DE8E70675A40C34A0515551F354000E6D1C202675A40915F51A742273540', 499, 874, 17.071326978981542, '0101000020E61000000B38C0A92F685A4067AE4D2680223540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (121, 'Big B A A A B A', '0103000020E610000001000000090000004C45F8510C615A407A9AB224D70A3540FE0A992B83615A404DDC2A88810E35407A6394A97A615A4077AD2734F50E3540E8DD585018625A400400C79E3D0F3540548EC9E2FE625A404B901150E1103540F0674D33AA635A407088FD0DF6103540F7B2F72629635A400830B8282B0C35402716F88A6E625A408BDD3EABCC0C35404C45F8510C615A407A9AB224D70A3540', 98, 226, 6.227313930985214, '0101000020E6100000339CECEA71625A40633E219B200E3540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (122, 'Big B A A A B B', '0103000020E6100000010000000A0000007A6394A97A615A4077AD2734F50E35402194F77134615A4023BDA8DDAF12354061A5828AAA615A40B1DD3D40F71535402C03FC8A5D615A40A71B8B1A0A1B3540F792C6681D635A40751F80D4261A354045AC47DF99645A407DC599ADDC193540F0674D33AA635A407088FD0DF6103540548EC9E2FE625A404B901150E1103540E8DD585018625A400400C79E3D0F35407A6394A97A615A4077AD2734F50E3540', 519, 1717, 22.242622370005236, '0101000020E6100000236B0634B7625A4093E525C067153540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (123, 'Big B A A B B A', '0103000020E61000000100000008000000CA230168295F5A40535F3DBE220B354085573783645F5A404F91FCEEC10F354006BAF605F45F5A4079AEEFC3410E35407A6394A97A615A4077AD2734F50E3540FE0A992B83615A404DDC2A88810E35404C45F8510C615A407A9AB224D70A35402D5DC136E25F5A404CC3F01131093540CA230168295F5A40535F3DBE220B3540', 69, 99, 7.628230745303947, '0101000020E61000009BD8D96F3B605A40F1193FCA730C3540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (124, 'Big B A A B B B', '0103000020E6100000010000000A00000085573783645F5A404F91FCEEC10F3540446FF1F09E5F5A406A4DF38E5314354078177B717A5E5A405E8EAA68241C3540705B5B785E605A40711DE38A8B1B35402C03FC8A5D615A40A71B8B1A0A1B354061A5828AAA615A40B1DD3D40F71535402194F77134615A4023BDA8DDAF1235407A6394A97A615A4077AD2734F50E354006BAF605F45F5A4079AEEFC3410E354085573783645F5A404F91FCEEC10F3540', 96, 127, 22.835937341235386, '0101000020E61000008E05A19D4E605A403EBD4D96B0153540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (128, 'Big A A B A A A B', '0103000020E61000000100000008000000240A2DEBFE6C5A40C5E23785950E3540AB083719556C5A403EEB1A2D070A354016FC36C4786A5A40A6272CF1800A3540B8955E9B8D695A401FD7868A710A35406B2C616D8C695A40BD1B0B0A830A3540BF0E9C33A2695A40A67C08AA460F3540B43A3943716A5A40C328081EDF0E3540240A2DEBFE6C5A40C5E23785950E3540', 120, 120, 9.80524520923048, '0101000020E61000000E1D7133226B5A404F445F31A40C3540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (129, 'Big A A B A B B A', '0103000020E610000001000000070000009FAD672E2E685A40A8AFD5885A0A3540C4279D4830685A4044BFB67EFA0B354059B38924BE675A40E311C3AB38103540C9A04A35A2695A40537183A4460F35406B2C616D8C695A40BD1B0B0A830A354027154B998D695A40A8684C8B710A35409FAD672E2E685A40A8AFD5885A0A3540', 7, 12, 6.6945576322808895, '0101000020E61000000D4F4205C8685A40C08120433B0D3540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (130, 'Big A A B A B B B', '0103000020E6100000010000000800000059B38924BE675A40E311C3AB381035406CE9D1544F675A40F180B22957143540E78E4A26B1665A40E020EF8FD619354003CAE878F3675A40DD98CEE95A1A354072FDBB3E73685A40DDB6EF517F153540D1967329AE695A40207BBDFBE3113540C9A04A35A2695A40537183A4460F354059B38924BE675A40E311C3AB38103540', 7, 18, 13.206846088847334, '0101000020E6100000F33A9B1122685A4010FD4CEA63143540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (133, 'Big A A B A A A A A', '0103000020E6100000010000000A000000D8F0F44A59695A4003CDE7DCED1A3540A4FE7A85056D5A40D238D4EFC20E35402979758E016D5A404BCB48BDA70E3540240A2DEBFE6C5A40C5E23785950E3540B43A3943716A5A40C328081EDF0E3540BF0E9C33A2695A40A67C08AA460F3540D1967329AE695A40207BBDFBE311354072FDBB3E73685A40DDB6EF517F15354030815B77F3675A408A1F63EE5A1A3540D8F0F44A59695A4003CDE7DCED1A3540', 10, 33, 19.82594032815186, '0101000020E610000078910E712F6A5A40D36B209427143540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (137, 'Big A B B A A A', '0103000020E610000001000000090000005AF804CDEA6D5A408022235B6E1D3540D0EF68D43D6E5A405BF3B5F7411C3540F4DDAD2CD16D5A40B247A81952153540DC6536FD566E5A401024CE0EE1103540856760E9FE6C5A40663BBB89950E3540A4FE7A85056D5A40D238D4EFC20E354009F4544A59695A4057E8E1D6ED1A354093C5FD47A66A5A408E942D92761B35405AF804CDEA6D5A408022235B6E1D3540', 687, 1830, 32.28140881102736, '0101000020E6100000862AAB5C6C6C5A406255461F12173540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (139, 'Big A B B A B A', '0103000020E610000001000000070000006C76A4FACE715A407B116DC7D40D35406C76A4FACE715A4062A3ACDF4C0C35406C76A4FACE715A40E694809884073540813E9127496F5A403F912749D7083540F7578FFB566E5A40C8B1F50CE1103540FF774485EA6E5A40F4FA93F8DC1135406C76A4FACE715A407B116DC7D40D3540', 3, 3, 16.188195836658, '0101000020E61000005B49697032705A406C2AEB62710C3540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (140, 'Big A B B A B B', '0103000020E6100000010000000600000032F7BE28496F5A40CD24914DD7083540DD442DCDAD6D5A40E2E7BF07AF093540D3D12D18556C5A4079B71C29070A3540856760E9FE6C5A40663BBB89950E3540DC6536FD566E5A401024CE0EE110354032F7BE28496F5A40CD24914DD7083540', 46, 89, 10.793561434337372, '0101000020E6100000C04067E3DB6D5A404854FF914C0C3540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (144, 'Big B A A A A B', '0103000020E6100000010000000B000000725751B1C1605A40976620BA13003540F5F411F8C3605A401D56B8E5230135403A9160AA99615A40153B1A87FA0535406D01A1F5F0605A4006F1811DFF0935404C45F8510C615A407A9AB224D70A35402716F88A6E625A408BDD3EABCC0C3540F7B2F72629635A400830B8282B0C3540E7357689EA625A40FD87F4DBD7093540CB38F76B33645A40F51E488DF2013540BD1AA034D4625A40416150A6D1003540725751B1C1605A40976620BA13003540', 141, 302, 21.340778404477092, '0101000020E6100000A740344D55625A40AC0966FBD1053540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (146, 'Big B A A B A B', '0103000020E6100000010000000B00000026E4839E0D5E5A40C947676D8E023540EEEBC039235F5A406327BC04A70A3540CA230168295F5A40535F3DBE220B35402D5DC136E25F5A404CC3F011310935404C45F8510C615A407A9AB224D70A35406D01A1F5F0605A4006F1811DFF0935403A9160AA99615A40153B1A87FA053540F5F411F8C3605A401D56B8E523013540725751B1C1605A40976620BA13003540F6D1A92B9F5F5A40AE0E80B8ABFF344026E4839E0D5E5A40C947676D8E023540', 203, 300, 21.063493291262038, '0101000020E6100000F0155057E05F5A403933640714053540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (149, 'Big A B B B A A', '0103000020E610000001000000070000006C76A4FACE715A40B654019E840735406C76A4FACE715A40118AADA069053540CE9256356E725A4077A8A36CDC013540920EDC6FD76F5A400B2DD91B760235409813B4C9E16F5A402FBFD364C603354032F7BE28496F5A40CD24914DD70835406C76A4FACE715A40B654019E84073540', 24, 37, 11.073802718055981, '0101000020E6100000951D9805CD705A407992D4042B053540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (152, 'Big A B B B B B', '0103000020E6100000010000000800000043FA92324E6B5A4033D5BC78F9023540D3D12D18556C5A4079B71C29070A3540DD442DCDAD6D5A40E2E7BF07AF09354032F7BE28496F5A40CD24914DD70835409813B4C9E16F5A402FBFD364C6033540920EDC6FD76F5A400B2DD91B76023540A4FE7A85056D5A406806F1811D03354043FA92324E6B5A4033D5BC78F9023540', 281, 841, 20.562944196772026, '0101000020E6100000674F261CAF6D5A408448CCB9F8053540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (153, 'Big A A B A A B A', '0103000020E61000000100000007000000D3D12D18556C5A4079B71C29070A354043FA92324E6B5A4033D5BC78F9023540CF23FDF8D6695A405BFB84B1DA02354072874D64E6695A40558A1D8D4305354027154B998D695A40A8684C8B710A354016FC36C4786A5A40A6272CF1800A3540D3D12D18556C5A4079B71C29070A3540', 30, 84, 12.393460688391768, '0101000020E6100000F35A78E9CD6A5A40CA09CD980C073540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (156, 'Big A A B A B A B', '0103000020E61000000100000007000000F3D2707124685A40231DEBD0D30235409FAD672E2E685A40A8AFD5885A0A354027154B998D695A40A8684C8B710A354072874D64E6695A40558A1D8D43053540CF23FDF8D6695A405BFB84B1DA023540AABBB20B06695A403AEB538EC9023540F3D2707124685A40231DEBD0D3023540', 55, 69, 9.908757267775924, '0101000020E61000004F0CC2BEF8685A40CF85059275063540', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (157, 'Big A A A A A', '0103000020E6100000010000000700000081F872FF4E635A40C9D3F40482243540B587BD50C0635A4096EA025E662435400F0A451891645A405CFC12961D25354094AB8DEE96655A40A848675BAB19354045AC47DF99645A407DC599ADDC19354001BD70E7C2645A40F77475C7621B354081F872FF4E635A40C9D3F40482243540', 58, 111, 8.601734797826921, '0101000020E610000093B80E288D645A40404E4578C31F3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (158, 'Big A A A A B', '0103000020E610000001000000070000000F0A451891645A405CFC12961D253540092643FDAA655A40725312F81426354049D6E1E82A665A40A6272CF1801E3540E78E4A26B1665A40E020EF8FD61935400A4966F50E665A409C69C2F69319354094AB8DEE96655A40A848675BAB1935400F0A451891645A405CFC12961D253540', 241, 751, 10.459707044044993, '0101000020E6100000DE8AA13D99655A40621AAA40B61F3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (159, 'Big A A B B B A A', '0103000020E61000000100000007000000F7B2F72629635A400830B8282B0C3540F0674D33AA635A407088FD0DF6103540E5B9BE0F07655A409622F94A20113540A2C89F17EA655A40C6937231E5103540F051B4AFB2655A407658A9EC300A35405E10919A76655A40780C8FFD2C0A3540F7B2F72629635A400830B8282B0C3540', 3, 7, 11.839357399729492, '0101000020E6100000B88DB789AB645A408160D382F10D3540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (160, 'Big A A B B B A B', '0103000020E61000000100000007000000A2C89F17EA655A40C6937231E510354011E335AFEA665A40A1F5F065A210354059B38924BE675A40E311C3AB38103540C4279D4830685A4044BFB67EFA0B35409FAD672E2E685A40A8AFD5885A0A3540F051B4AFB2655A407658A9EC300A3540A2C89F17EA655A40C6937231E5103540', 340, 790, 11.345467923915214, '0101000020E6100000939D4379E4665A4097B899A8440D3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (161, 'Big A A B B B B A', '0103000020E61000000100000007000000F0674D33AA635A407088FD0DF610354045AC47DF99645A407DC599ADDC19354094AB8DEE96655A40A848675BAB1935403D9D2B4A09665A408461C092AB143540A2C89F17EA655A40C6937231E5103540E5B9BE0F07655A409622F94A20113540F0674D33AA635A407088FD0DF6103540', 4, 6, 12.37408048771285, '0101000020E610000017B9F062FD645A407C14FF5FDB143540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (162, 'Big A A B B B B B', '0103000020E6100000010000000900000094AB8DEE96655A40A848675BAB1935400A4966F50E665A409C69C2F693193540E78E4A26B1665A40E020EF8FD61935406CE9D1544F675A40F180B2295714354059B38924BE675A40E311C3AB3810354011E335AFEA665A40A1F5F065A2103540A2C89F17EA655A40C6937231E51035403D9D2B4A09665A408461C092AB14354094AB8DEE96655A40A848675BAB193540', 7, 8, 9.76517189253478, '0101000020E6100000EC53710E97665A40DDD42574C6143540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (165, 'Big A A B B A B A', '0103000020E61000000100000009000000CB38F76B33645A40F51E488DF2013540E7357689EA625A40FD87F4DBD7093540F7B2F72629635A400830B8282B0C35405E10919A76655A40780C8FFD2C0A3540F051B4AFB2655A407658A9EC300A354011FE45D098655A4010069E7B0F0735402A216C39F6655A40F8A80634ED023540C97553CA6B655A4000FDBE7FF3023540CB38F76B33645A40F51E488DF2013540', 137, 137, 15.886096639923595, '0101000020E61000008694856B79645A40BCF2D08B29073540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (166, 'Big A A B B A B B', '0103000020E61000000100000006000000F051B4AFB2655A407658A9EC300A35409FAD672E2E685A40A8AFD5885A0A3540F3D2707124685A40231DEBD0D30235402A216C39F6655A40F8A80634ED02354011FE45D098655A4010069E7B0F073540F051B4AFB2655A407658A9EC300A3540', 91, 288, 14.606299551352324, '0101000020E6100000CCB7CD76F2665A4051ABBA9DA8063540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (167, 'Big B B B A', '0103000020E610000001000000070000003AC95697535A5A40E7DF2EFB751F3540419DF2E8465B5A409966BAD7492135402A00C633685E5A40BEA085048C2A3540750305DEC95E5A40377007EA94273540792288F3705C5A40A5A14621C91C35402BC0779B375C5A40E99AC937DB1C35403AC95697535A5A40E7DF2EFB751F3540', 308, 846, 15.025574324180127, '0101000020E610000068E5E6F8CB5C5A40AFF45A23CF223540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (168, 'Big B B B B', '0103000020E61000000100000007000000F99924DDC95E5A404F7BE2EA94273540DC12B9E00C5F5A40A65EB7088C2535404DE3195F745F5A40481177C772253540DD7A4D0F0A5E5A40DB32E02C251F354078177B717A5E5A405E8EAA68241C354015733BF4705C5A40FE53491BC91C3540F99924DDC95E5A404F7BE2EA94273540', 3, 7, 9.718470345992042, '0101000020E6100000C35A6D31FD5D5A401F91AAF6F1203540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (169, 'Big B B A B A A', '0103000020E610000001000000080000002800064FAF565A40C50BF9D2A11A354012FB04508C585A4012BC218D0A1C3540D2D4189808595A4027A46086F91C354087A2409FC85A5A4087FBC8AD49173540966A55012D5B5A402801C724F7163540A59FCEE76C5A5A400A7FC39A8313354085CE6BEC12595A40AD4D637B2D1435402800064FAF565A40C50BF9D2A11A3540', 3, 3, 16.943364786570065, '0101000020E61000000AA1503418595A4046C5D34D1E183540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (171, 'Big B B A B B A', '0103000020E61000000100000007000000D2D4189808595A4027A46086F91C354098EEC498535A5A4082947FFD751F35402BC0779B375C5A40E99AC937DB1C354015733BF4705C5A40FE53491BC91C3540966A55012D5B5A402801C724F716354087A2409FC85A5A4087FBC8AD49173540D2D4189808595A4027A46086F91C3540', 149, 262, 12.163136197097227, '0101000020E61000008D7D474BC25A5A4068C9696F961B3540', NULL, '#367be2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (172, 'Big B B A B B B', '0103000020E6100000010000000700000015733BF4705C5A40FE53491BC91C354078177B717A5E5A405E8EAA68241C3540446FF1F09E5F5A406A4DF38E5314354085573783645F5A404F91FCEEC10F3540AB3FC230605D5A404B3E761728153540966A55012D5B5A402801C724F716354015733BF4705C5A40FE53491BC91C3540', 26, 43, 23.135640612604604, '0101000020E61000007828A6DBB25D5A40391270EB7A173540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (174, 'Big B B A A A B', '0103000020E61000000100000008000000633598B181565A40D91AA2EE29063540626A4B1DE4535A40BB9866BAD7093540D976DA1A11545A4091D442C9E41035403A12DC069D545A40B5914B19C11435404CFE277FF7565A4044F9821612103540A35560DAED575A4072DC70F2370E35402CF3565D87565A40CBBBEA01F30C3540633598B181565A40D91AA2EE29063540', 514, 1700, 24.619226717966956, '0101000020E61000005B965B1C72555A40969962B7780D3540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (175, 'Big B B A A B A', '0103000020E610000001000000090000003A12DC069D545A40B5914B19C1143540381092054C555A40E9D2BF24951935402800064FAF565A40C50BF9D2A11A354085CE6BEC12595A40AD4D637B2D143540A59FCEE76C5A5A400A7FC39A831335408DD13AAA9A595A40A59E05A1BC0F3540A35560DAED575A4072DC70F2370E35404CFE277FF7565A4044F98216121035403A12DC069D545A40B5914B19C1143540', 11, 12, 30.26714386244869, '0101000020E6100000AA29C5484A575A405E7819AD32143540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (177, 'Big B B A B A B A', '0103000020E61000000100000007000000966A55012D5B5A402801C724F7163540AB3FC230605D5A404B3E76172815354019E60EDF655D5A4023DA68E218153540922CA9D8ED5C5A40648037E925113540B28174B1695C5A4066BD18CA89123540A59FCEE76C5A5A400A7FC39A83133540966A55012D5B5A402801C724F7163540', 1, 2, 7.254493660952258, '0101000020E6100000A2E5BE82FF5B5A40533A62285B143540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (178, 'Big B B A B A B B', '0103000020E6100000010000000500000019E60EDF655D5A4023DA68E21815354085573783645F5A404F91FCEEC10F3540CA230168295F5A40535F3DBE220B3540922CA9D8ED5C5A40648037E92511354019E60EDF655D5A4023DA68E218153540', 63, 208, 8.951132286808617, '0101000020E6100000F35D08DA375E5A40FB345AB23D103540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (180, 'Big B B A A A A B', '0103000020E610000001000000090000003290FFB39A5A5A40794E78DE4D01354060ADDA35215A5A40FB743C66A00235405797530262595A40F758FAD0050935409964E42CEC565A407F50172994053540633598B181565A40D91AA2EE290635402CF3565D87565A40CBBBEA01F30C3540A35560DAED575A4072DC70F2370E3540B6C09068915B5A40F681EE0F370735403290FFB39A5A5A40794E78DE4D013540', 210, 403, 23.045624726630844, '0101000020E6100000B37E685DC3585A403E608725B6083540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (181, 'Big B B A A B B A', '0103000020E61000000100000008000000A59FCEE76C5A5A400A7FC39A83133540B28174B1695C5A4066BD18CA89123540922CA9D8ED5C5A40648037E925113540823B50A73C5C5A409B1F7F69510B3540B6C09068915B5A40F681EE0F37073540A35560DAED575A4072DC70F2370E35408DD13AAA9A595A40A59E05A1BC0F3540A59FCEE76C5A5A400A7FC39A83133540', 456, 947, 25.561821987974017, '0101000020E6100000ED920781E05A5A40CDF091F6FE0D3540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (182, 'Big B B A A B B B', '0103000020E61000000100000008000000922CA9D8ED5C5A40648037E925113540CA230168295F5A40535F3DBE220B3540EEEBC039235F5A406327BC04A70A354026E4839E0D5E5A40C947676D8E023540A7954220975C5A4027A25F5B3F053540B6C09068915B5A40F681EE0F37073540823B50A73C5C5A409B1F7F69510B3540922CA9D8ED5C5A40648037E925113540', 562, 1453, 22.78817419997436, '0101000020E61000001259AF286C5D5A40097EF90D81093540', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (187, 'Big B A A A A A A', '0103000020E61000000100000009000000F43AF1BB7A655A40DD530C6C22EF3440AEB6627FD9645A40F2ED5D83BEF034407061DD7877615A40B6A2CD716EEF3440989AE15F14615A406C5BE06766F03440EC681CEA77615A40043752B648F23440BA3D1D9CE3605A40F8233DF30FF83440D2E5CDE15A635A40C51A2E724FF73440245F7187B9655A4024A9B213D1F63440F43AF1BB7A655A40DD530C6C22EF3440', 289, 609, 26.128241745346397, '0101000020E61000001032EB4E50635A400423D0FDC6F33440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (188, 'Big B A A A A A B', '0103000020E6100000010000000A000000BA3D1D9CE3605A40F8233DF30FF8344046ED7E15E0605A40AA7D3A1E33F83440CB10C7BAB8605A4091EEE714E4FB3440725751B1C1605A40976620BA13003540BD1AA034D4625A40416150A6D1003540CB38F76B33645A40F51E488DF2013540BF654E97C5655A40ECA694D74AF83440245F7187B9655A4024A9B213D1F63440D2E5CDE15A635A40C51A2E724FF73440BA3D1D9CE3605A40F8233DF30FF83440', 5, 9, 33.48081227707173, '0101000020E61000005BE45A1416635A4093C0AFF7DFFB3440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (189, 'Big B A A B A A A', '0103000020E610000001000000060000003DD4B66114615A4037E2C96E66F034403673486AA15D5A402C6684B707F934405C1FD61BB55D5A40A96A82A8FBF83440446B459BE3605A408D0DDDEC0FF83440EC681CEA77615A40043752B648F234403DD4B66114615A4037E2C96E66F03440', 215, 398, 9.85272964050436, '0101000020E6100000F100909805605A40C07D5E1A8EF53440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (190, 'Big B A A B A A B', '0103000020E6100000010000000B000000E3FE23D3A15D5A401B4CC3F011F93440CBD8D0CDFE5D5A40499F56D11F023540AC74779D0D5E5A40F96A47718E023540F6D1A92B9F5F5A40AE0E80B8ABFF3440E4D70FB1C1605A40F627F1B913003540CB10C7BAB8605A4091EEE714E4FB344046ED7E15E0605A40AA7D3A1E33F83440446B459BE3605A408D0DDDEC0FF834405C1FD61BB55D5A40A96A82A8FBF834403673486AA15D5A402C6684B707F93440E3FE23D3A15D5A401B4CC3F011F93440', 227, 470, 17.02518652423925, '0101000020E6100000CA5FE872395F5A4093AB0AE48AFC3440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (191, 'Big A B B B A B A', '0103000020E61000000100000006000000CE9256356E725A4077A8A36CDC0135407FA2B2614D735A40D42B6519E2FC344015ABBAD228725A4061819B0470F83440E0A58026756F5A40C666ECF0FCF53440920EDC6FD76F5A400B2DD91B76023540CE9256356E725A4077A8A36CDC013540', 440, 1331, 27.091273904843955, '0101000020E61000001362B82028715A40A2120032B7FC3440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (194, 'Big A B B B B A B', '0103000020E61000000100000009000000D0C65BF82B6D5A4042D774F343F53440E00ED4298F6E5A40CE8AA8893EFB3440B2A03028D36A5A40F5BA4560ACFF344043FA92324E6B5A4033D5BC78F9023540A4FE7A85056D5A406806F1811D033540920EDC6FD76F5A400B2DD91B76023540E0A58026756F5A40C666ECF0FCF53440FE65F7E4616E5A40BD8E386403F53440D0C65BF82B6D5A4042D774F343F53440', 321, 1037, 31.071845176339835, '0101000020E6100000BDEA63BAE76D5A400F0BC449B6FD3440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (195, 'Big A A B A A B B A', '0103000020E6100000010000000800000043FA92324E6B5A4033D5BC78F9023540B2A03028D36A5A40F5BA4560ACFF3440E00ED4298F6E5A40CE8AA8893EFB3440D0C65BF82B6D5A4042D774F343F53440F92DEECA646A5A40C10D3818D8F534409510ACAA97695A404D327216F6F83440CF23FDF8D6695A405BFB84B1DA02354043FA92324E6B5A4033D5BC78F9023540', 290, 749, 32.62929843486149, '0101000020E6100000DB873AF2966B5A40CC7E0B1DF6FA3440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (196, 'Big A A B A A B B B', '0103000020E61000000100000008000000D0C65BF82B6D5A4042D774F343F534409BE8F351466C5A40AE2CD15966F13440D6B6AFA3546D5A4079761F9EAAEC34401E51CC3AF66B5A40AE489D97C2EA34405BCF108E596B5A403F8F519E79ED34407C9DD497A56A5A4072361D01DCF43440F92DEECA646A5A40C10D3818D8F53440D0C65BF82B6D5A4042D774F343F53440', 5, 15, 14.163459707083778, '0101000020E6100000E3783EEBE96B5A405C3EEF7DE3F03440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (200, 'Big B B A A A A A B', '0103000020E610000001000000090000003EB2B96A9E5D5A405DA3E5400FF9344073637AC2125D5A40AB4203B16CFA34405E4D9EB29A5A5A40E46723D74D01354021B07268915B5A403D450E1137073540A7954220975C5A4027A25F5B3F053540AC74779D0D5E5A40F96A47718E023540CBD8D0CDFE5D5A40499F56D11F0235403673486AA15D5A402C6684B707F934403EB2B96A9E5D5A405DA3E5400FF93440', 67, 192, 18.055978720286177, '0101000020E61000000D9EDEDF7E5C5A40341003BCB0003540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (277, 'Ô 1', '0103000020E6100000010000000700000098EEC498535A5A4082947FFD751F3540419DF2E8465B5A409966BAD7492135402A00C633685E5A40BEA085048C2A3540F99924DDC95E5A404F7BE2EA9427354015733BF4705C5A40FE53491BC91C35402BC0779B375C5A40E99AC937DB1C354098EEC498535A5A4082947FFD751F3540', 120, 135, 17.35703959479538, '0101000020E610000033EF0CF9CB5C5A40574F2722CF223540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (278, 'Ô 2', '0103000020E61000000100000007000000F99924DDC95E5A404F7BE2EA94273540DC12B9E00C5F5A40A65EB7088C2535404DE3195F745F5A40481177C772253540DD7A4D0F0A5E5A40DB32E02C251F354078177B717A5E5A405E8EAA68241C354015733BF4705C5A40FE53491BC91C3540F99924DDC95E5A404F7BE2EA94273540', 120, 268, 9.718470345992042, '0101000020E6100000C35A6D31FD5D5A401F91AAF6F1203540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (282, 'Ô 9', '0103000020E610000001000000080000003FDE509D73695A401E587CADC5263540CF2EDFFAB06A5A40BED9E6C6F4203540FB57569A946C5A40965F0663442235405AF804CDEA6D5A408022235B6E1D354093C5FD47A66A5A408E942D92761B354009F4544A59695A4057E8E1D6ED1A3540CA89761552685A4093ACC3D1551E35403FDE509D73695A401E587CADC5263540', 244, 1442, 25.81895617006527, '0101000020E6100000181B619EB26A5A409484FCC55A1F3540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (290, 'Ô 18', '0103000020E610000001000000090000006A1492CCEA6D5A40452FA3586E1D3540CFA44DD53D6E5A402C11A8FE411C3540F4DDAD2CD16D5A40B247A81952153540F7578FFB566E5A40C8B1F50CE1103540240A2DEBFE6C5A40C5E23785950E3540AEBCE47FF26C5A40F7764B72C00E3540D8F0F44A59695A4003CDE7DCED1A354093C5FD47A66A5A408E942D92761B35406A1492CCEA6D5A40452FA3586E1D3540', 120, 139, 28.295224218983442, '0101000020E610000030FDBD716A6C5A404659251205173540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (291, 'Ô 19', '0103000020E61000000100000008000000D0EF68D43D6E5A405BF3B5F7411C354014AE47E17A6F5A40357C0BEBC61735406C76A4FACE715A40793D98141F1735406C76A4FACE715A4097917F089F0D3540FF774485EA6E5A40F4FA93F8DC113540DC6536FD566E5A401024CE0EE1103540F4DDAD2CD16D5A40B247A81952153540D0EF68D43D6E5A405BF3B5F7411C3540', 228, 359, 25.790946818473305, '0101000020E61000008709AD3AE36F5A40DFB791C360143540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (292, 'Ô 30', '0103000020E610000001000000070000006C76A4FACE715A4097917F089F0D35406C76A4FACE715A4062A3ACDF4C0C35406C76A4FACE715A40B654019E8407354032F7BE28496F5A40CD24914DD7083540DC6536FD566E5A401024CE0EE1103540FF774485EA6E5A40F4FA93F8DC1135406C76A4FACE715A4097917F089F0D3540', 214, 1574, 18.432053625899094, '0101000020E610000098F8BC3A30705A40AB4ADC4B680C3540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (293, 'Ô 29', '0103000020E61000000100000006000000813E9127496F5A403F912749D7083540DD442DCDAD6D5A40E2E7BF07AF093540AB083719556C5A403EEB1A2D070A3540240A2DEBFE6C5A40C5E23785950E3540F7578FFB566E5A40C8B1F50CE1103540813E9127496F5A403F912749D7083540', 171, 347, 9.354320818405151, '0101000020E610000000CA9AE3DB6D5A40645EA18F4C0C3540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (294, 'Ô 5', '0103000020E6100000010000000700000081F872FF4E635A40C9D3F40482243540B587BD50C0635A4096EA025E662435400F0A451891645A405CFC12961D25354094AB8DEE96655A40A848675BAB19354045AC47DF99645A407DC599ADDC19354001BD70E7C2645A40F77475C7621B354081F872FF4E635A40C9D3F40482243540', 304, 581, 8.601734797826921, '0101000020E610000093B80E288D645A40404E4578C31F3540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (295, 'Ô 6', '0103000020E610000001000000070000000F0A451891645A405CFC12961D253540092643FDAA655A40725312F81426354049D6E1E82A665A40A6272CF1801E3540E78E4A26B1665A40E020EF8FD61935400A4966F50E665A409C69C2F69319354094AB8DEE96655A40A848675BAB1935400F0A451891645A405CFC12961D253540', 227, 748, 10.459707044044993, '0101000020E6100000DE8AA13D99655A40621AAA40B61F3540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (296, 'Ô 25', '0103000020E61000000100000007000000F7B2F72629635A400830B8282B0C3540F0674D33AA635A407088FD0DF6103540E5B9BE0F07655A409622F94A20113540A2C89F17EA655A40C6937231E5103540F051B4AFB2655A407658A9EC300A35405E10919A76655A40780C8FFD2C0A3540F7B2F72629635A400830B8282B0C3540', 277, 513, 11.839357399729492, '0101000020E6100000B88DB789AB645A408160D382F10D3540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (297, 'Ô 26', '0103000020E610000001000000080000006A2E3718EA655A4055A2EC2DE510354011E335AFEA665A40A1F5F065A210354016DEE522BE675A4007B64AB038103540C4279D4830685A4044BFB67EFA0B35400074982F2F685A40282A1BD6540A35401AA721AAF0665A401AC39CA04D0A3540225514AFB2655A40231631EC300A35406A2E3718EA655A4055A2EC2DE5103540', 120, 211, 9.81752644109315, '0101000020E6100000BE25C1BDE4665A408972A6DA450D3540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (298, 'Ô 14', '0103000020E61000000100000007000000F0674D33AA635A407088FD0DF610354045AC47DF99645A407DC599ADDC19354094AB8DEE96655A40A848675BAB1935403D9D2B4A09665A408461C092AB143540A2C89F17EA655A40C6937231E5103540E5B9BE0F07655A409622F94A20113540F0674D33AA635A407088FD0DF6103540', 120, 127, 12.37408048771285, '0101000020E610000017B9F062FD645A407C14FF5FDB143540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (299, 'Ô 15', '0103000020E6100000010000000900000094AB8DEE96655A40A848675BAB1935400A4966F50E665A409C69C2F693193540E78E4A26B1665A40E020EF8FD61935406CE9D1544F675A40F180B2295714354059B38924BE675A40E311C3AB3810354011E335AFEA665A40A1F5F065A2103540A2C89F17EA655A40C6937231E51035403D9D2B4A09665A408461C092AB14354094AB8DEE96655A40A848675BAB193540', 120, 435, 9.76517189253478, '0101000020E6100000EC53710E97665A40DDD42574C6143540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (300, 'Ô 36', '0103000020E61000000100000009000000E695EB6D33645A407E384888F2013540E7357689EA625A40FD87F4DBD70935403E76172829635A40B4722F302B0C35405E10919A76655A40780C8FFD2C0A3540225514AFB2655A40231631EC300A354011FE45D098655A4010069E7B0F0735408E210038F6655A40BC202235ED023540C97553CA6B655A4000FDBE7FF3023540E695EB6D33645A407E384888F2013540', 120, 656, 13.771892032862365, '0101000020E6100000FA90326B79645A404B07D48D29073540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (301, 'Ô 37', '0103000020E61000000100000007000000225514AFB2655A40231631EC300A35401AA721AAF0665A401AC39CA04D0A35400074982F2F685A40282A1BD6540A35400BD1217024685A40C9C859D8D30235408E210038F6655A40BC202235ED02354011FE45D098655A4010069E7B0F073540225514AFB2655A40231631EC300A3540', 425, 908, 12.690113302061171, '0101000020E6100000C18CEA8EF2665A40D3070E1EAA063540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (305, 'Ô 10', '0103000020E61000000100000007000000D2D4189808595A4027A46086F91C354098EEC498535A5A4082947FFD751F35402BC0779B375C5A40E99AC937DB1C354015733BF4705C5A40FE53491BC91C3540966A55012D5B5A402801C724F716354087A2409FC85A5A4087FBC8AD49173540D2D4189808595A4027A46086F91C3540', 244, 333, 12.163136197097227, '0101000020E61000008D7D474BC25A5A4068C9696F961B3540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (308, 'Ô 7', '0103000020E61000000100000007000000092643FDAA655A40725312F81426354000E6D1C202675A40915F51A742273540B554DE8E70675A40C34A0515551F354003CAE878F3675A40DD98CEE95A1A3540E78E4A26B1665A40E020EF8FD619354049D6E1E82A665A40A6272CF1801E3540092643FDAA655A40725312F814263540', 402, 431, 13.82751022995956, '0101000020E61000000A67738AC2665A4077BE41AC73203540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (309, 'Ô 8', '0103000020E6100000010000000800000000E6D1C202675A40915F51A7422735400F643DB5FA685A4096CB46E7FC2835403FDE509D73695A401E587CADC5263540CA89761552685A4093ACC3D1551E354009F4544A59695A4057E8E1D6ED1A354003CAE878F3675A40DD98CEE95A1A3540B554DE8E70675A40C34A0515551F354000E6D1C202675A40915F51A742273540', 427, 834, 17.071326978981542, '0101000020E61000000B38C0A92F685A4067AE4D2680223540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (310, 'Ô 11', '0103000020E6100000010000000700000015733BF4705C5A40FE53491BC91C354078177B717A5E5A405E8EAA68241C3540446FF1F09E5F5A406A4DF38E5314354085573783645F5A404F91FCEEC10F3540AB3FC230605D5A404B3E761728153540966A55012D5B5A402801C724F716354015733BF4705C5A40FE53491BC91C3540', 346, 563, 23.135640612604604, '0101000020E61000007828A6DBB25D5A40391270EB7A173540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (311, 'Ô 42', '0103000020E61000000100000008000000633598B181565A40D91AA2EE29063540626A4B1DE4535A40BB9866BAD7093540D976DA1A11545A4091D442C9E41035403A12DC069D545A40B5914B19C11435404CFE277FF7565A4044F9821612103540A35560DAED575A4072DC70F2370E35402CF3565D87565A40CBBBEA01F30C3540633598B181565A40D91AA2EE29063540', 120, 189, 24.619226717966956, '0101000020E61000005B965B1C72555A40969962B7780D3540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (312, 'Ô 31', '0103000020E6100000010000000900000027A435069D545A406EA7AD11C1143540381092054C555A40E9D2BF24951935404D840D4FAF565A40CBBC55D7A11A35408BA8893E1F595A401827BEDA5114354075E789E76C5A5A407B12D89C831335408DD13AAA9A595A40A59E05A1BC0F35401B0FB6D8ED575A404F965AEF370E35404CFE277FF7565A4044F982161210354027A435069D545A406EA7AD11C1143540', 120, 361, 26.528247332950592, '0101000020E6100000BF7A45334E575A400E960E5437143540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (313, 'Ô 56', '0103000020E61000000100000007000000C3C8F362A66A5A40DFE2A4DAEEE83440F15331A248695A40DE904BBE07E73440ADA7565F5D685A409D499BAA7BEC34402829132B21675A40AF594F2986F634405F81B55894685A40C5D199D738F63440D498107349695A40EF37DA71C3EF3440C3C8F362A66A5A40DFE2A4DAEEE83440', 221, 241, 17.18001270032339, '0101000020E6100000AD1EA4EED3685A4069D56B4ADCEE3440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (314, 'Ô 48', '0103000020E610000001000000070000002829132B21675A40AF594F2986F6344082397AFCDE665A404912842BA0F834402A216C39F6655A40F8A80634ED023540F3D2707124685A40231DEBD0D302354088A1D5C919685A401EC6A4BF97FA34405F81B55894685A40C5D199D738F634402829132B21675A40AF594F2986F63440', 120, 928, 16.890852814325992, '0101000020E6100000AC1ED5E454675A40CC994EDB23FD3440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (315, 'Ô 55', '0103000020E61000000100000008000000F15331A248695A40DE904BBE07E73440373465A71F665A404221020EA1E2344096CD1C925A675A40EB8F300C58EA3440F43AF1BB7A655A40DD530C6C22EF3440245F7187B9655A4024A9B213D1F634402829132B21675A40AF594F2986F63440ADA7565F5D685A409D499BAA7BEC3440F15331A248695A40DE904BBE07E73440', 120, 2045, 29.093808594521352, '0101000020E6100000FA6BCB162A675A40775FE01861ED3440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (316, 'Ô 3', '0103000020E6100000010000000800000078177B717A5E5A405E8EAA68241C3540DD7A4D0F0A5E5A40DB32E02C251F35404DE3195F745F5A40481177C7722535402AF75B6B2A615A400E77A2E2072535406EF7729F1C615A40B9382A37511F35402C03FC8A5D615A40A71B8B1A0A1B3540705B5B785E605A40711DE38A8B1B354078177B717A5E5A405E8EAA68241C3540', 120, 178, 20.24444185836947, '0101000020E61000002ACC4F55DD5F5A402668744912203540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (317, 'Ô 4', '0103000020E610000001000000080000002AF75B6B2A615A400E77A2E20725354081F872FF4E635A40C9D3F4048224354001BD70E7C2645A40F77475C7621B354045AC47DF99645A407DC599ADDC193540F792C6681D635A40751F80D4261A35402C03FC8A5D615A40A71B8B1A0A1B35406EF7729F1C615A40B9382A37511F35402AF75B6B2A615A400E77A2E207253540', 120, 218, 24.486402723479014, '0101000020E6100000AF5F491CB4625A400FFBC3E4211F3540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (318, 'Ô 47', '0103000020E61000000100000008000000245F7187B9655A4024A9B213D1F63440BF654E97C5655A40ECA694D74AF83440CB38F76B33645A40F51E488DF2013540C97553CA6B655A4000FDBE7FF30235402A216C39F6655A40F8A80634ED02354082397AFCDE665A404912842BA0F834402829132B21675A40AF594F2986F63440245F7187B9655A4024A9B213D1F63440', 120, 184, 14.266557583706582, '0101000020E6100000AE685A5BBE655A4002547B5421FD3440', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (319, 'Ô 24', '0103000020E610000001000000090000004C45F8510C615A407A9AB224D70A3540FE0A992B83615A404DDC2A88810E35407A6394A97A615A4077AD2734F50E3540E8DD585018625A400400C79E3D0F3540548EC9E2FE625A404B901150E1103540F0674D33AA635A407088FD0DF6103540F7B2F72629635A400830B8282B0C35402716F88A6E625A408BDD3EABCC0C35404C45F8510C615A407A9AB224D70A3540', 120, 134, 6.227313930985214, '0101000020E6100000339CECEA71625A40633E219B200E3540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (320, 'Ô 13', '0103000020E6100000010000000A0000007A6394A97A615A4077AD2734F50E35402194F77134615A4023BDA8DDAF12354061A5828AAA615A40B1DD3D40F71535402C03FC8A5D615A40A71B8B1A0A1B3540F792C6681D635A40751F80D4261A354045AC47DF99645A407DC599ADDC193540F0674D33AA635A407088FD0DF6103540548EC9E2FE625A404B901150E1103540E8DD585018625A400400C79E3D0F35407A6394A97A615A4077AD2734F50E3540', 366, 1232, 22.242622370005236, '0101000020E6100000236B0634B7625A4093E525C067153540', NULL, '#36e2e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (321, 'Ô 23', '0103000020E61000000100000008000000D9960167295F5A40A1681EC0220B35401A170E84645F5A407FF8F9EFC10F354006BAF605F45F5A4079AEEFC3410E35404A09C1AA7A615A405323F433F50E3540FE0A992B83615A404DDC2A88810E354006DA1D520C615A402D26361FD70A35402D5DC136E25F5A404CC3F01131093540D9960167295F5A40A1681EC0220B3540', 120, 591, 6.611249757559225, '0101000020E6100000ED58F96F3B605A40911A47C9730C3540', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (322, 'Ô 12', '0103000020E6100000010000000A00000085573783645F5A404F91FCEEC10F3540446FF1F09E5F5A406A4DF38E5314354078177B717A5E5A405E8EAA68241C3540705B5B785E605A40711DE38A8B1B35402C03FC8A5D615A40A71B8B1A0A1B354061A5828AAA615A40B1DD3D40F71535402194F77134615A4023BDA8DDAF1235407A6394A97A615A4077AD2734F50E354006BAF605F45F5A4079AEEFC3410E354085573783645F5A404F91FCEEC10F3540', 120, 2165, 22.835937341235386, '0101000020E61000008E05A19D4E605A403EBD4D96B0153540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (323, 'Ô 28', '0103000020E6100000010000000A000000240A2DEBFE6C5A40C5E23785950E354022E010AAD46C5A409BAA7B64730D3540382C0DFCA86C5A40A662635E470C3540AB083719556C5A403EEB1A2D070A354016FC36C4786A5A40A6272CF1800A3540B8955E9B8D695A401FD7868A710A35406B2C616D8C695A40BD1B0B0A830A3540BF0E9C33A2695A40A67C08AA460F3540B43A3943716A5A40C328081EDF0E3540240A2DEBFE6C5A40C5E23785950E3540', 120, 145, 9.80521327046233, '0101000020E6100000709DAA32226B5A40E2525A31A40C3540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (324, 'Ô 27', '0103000020E610000001000000070000000074982F2F685A40282A1BD6540A3540C4279D4830685A4044BFB67EFA0B354016DEE522BE675A4007B64AB038103540BF0E9C33A2695A40A67C08AA460F35406B2C616D8C695A40BD1B0B0A830A3540B8955E9B8D695A401FD7868A710A35400074982F2F685A40282A1BD6540A3540', 120, 125, 5.810432566448569, '0101000020E61000000249AA02C8685A409AA3D9243A0D3540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (325, 'Ô 16', '0103000020E6100000010000000800000059B38924BE675A40E311C3AB381035406CE9D1544F675A40F180B22957143540E78E4A26B1665A40E020EF8FD619354003CAE878F3675A40DD98CEE95A1A354072FDBB3E73685A40DDB6EF517F153540D1967329AE695A40207BBDFBE3113540C9A04A35A2695A40537183A4460F354059B38924BE675A40E311C3AB38103540', 214, 221, 13.206846088847334, '0101000020E6100000F33A9B1122685A4010FD4CEA63143540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (326, 'Ô 17', '0103000020E6100000010000000A000000D8F0F44A59695A4003CDE7DCED1A3540BD546CCCEB6C5A402D26361FD70E3540240A2DEBFE6C5A40C5E23785950E35405B43A9BD886C5A40363FFED2A20E3540B43A3943716A5A40C328081EDF0E3540BF0E9C33A2695A40A67C08AA460F3540D1967329AE695A40207BBDFBE311354072FDBB3E73685A40DDB6EF517F15354030815B77F3675A408A1F63EE5A1A3540D8F0F44A59695A4003CDE7DCED1A3540', 120, 136, 19.491375784364937, '0101000020E6100000600AB764286A5A407C8B55B72D143540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (328, 'Ô 35', '0103000020E6100000010000000B000000E4D70FB1C1605A40F627F1B913003540F5F411F8C3605A401D56B8E5230135403A9160AA99615A40153B1A87FA0535406D01A1F5F0605A4006F1811DFF09354006DA1D520C615A402D26361FD70A35402716F88A6E625A408BDD3EABCC0C35403E76172829635A40B4722F302B0C3540E7357689EA625A40FD87F4DBD7093540E695EB6D33645A407E384888F2013540BD1AA034D4625A40416150A6D1003540E4D70FB1C1605A40F627F1B913003540', 413, 453, 18.501851961595072, '0101000020E610000044F4E64D55625A40DA1D58FAD1053540', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (329, 'Ô 34', '0103000020E6100000010000000B00000026E4839E0D5E5A40C947676D8E023540EEEBC039235F5A406327BC04A70A3540CA230168295F5A40535F3DBE220B35402D5DC136E25F5A404CC3F011310935404C45F8510C615A407A9AB224D70A35406D01A1F5F0605A4006F1811DFF0935403A9160AA99615A40153B1A87FA053540F5F411F8C3605A401D56B8E523013540725751B1C1605A40976620BA13003540F6D1A92B9F5F5A40AE0E80B8ABFF344026E4839E0D5E5A40C947676D8E023540', 120, 157, 21.063493291262038, '0101000020E6100000F0155057E05F5A403933640714053540', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (330, 'Ô 21', '0103000020E61000000100000007000000966A55012D5B5A402801C724F7163540AB3FC230605D5A404B3E76172815354019E60EDF655D5A4023DA68E218153540922CA9D8ED5C5A40648037E925113540B28174B1695C5A4066BD18CA89123540A59FCEE76C5A5A400A7FC39A83133540966A55012D5B5A402801C724F7163540', 147, 207, 7.254493660952258, '0101000020E6100000A2E5BE82FF5B5A40533A62285B143540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (331, 'Ô 22', '0103000020E6100000010000000500000019E60EDF655D5A4023DA68E21815354085573783645F5A404F91FCEEC10F3540CA230168295F5A40535F3DBE220B3540922CA9D8ED5C5A40648037E92511354019E60EDF655D5A4023DA68E218153540', 120, 144, 8.951132286808617, '0101000020E6100000F35D08DA375E5A40FB345AB23D103540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (332, 'Ô 41', '0103000020E610000001000000070000006C76A4FACE715A40B654019E840735406C76A4FACE715A40118AADA069053540CE9256356E725A4077A8A36CDC013540920EDC6FD76F5A400B2DD91B760235409813B4C9E16F5A402FBFD364C603354032F7BE28496F5A40CD24914DD70835406C76A4FACE715A40B654019E84073540', 120, 474, 11.073802718055981, '0101000020E6100000951D9805CD705A407992D4042B053540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (333, 'Ô 40', '0103000020E6100000010000000800000043FA92324E6B5A4033D5BC78F9023540D3D12D18556C5A4079B71C29070A3540DD442DCDAD6D5A40E2E7BF07AF09354032F7BE28496F5A40CD24914DD70835409813B4C9E16F5A402FBFD364C6033540920EDC6FD76F5A400B2DD91B76023540A4FE7A85056D5A406806F1811D03354043FA92324E6B5A4033D5BC78F9023540', 120, 245, 20.562944196772026, '0101000020E6100000674F261CAF6D5A408448CCB9F8053540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (334, 'Ô 39', '0103000020E61000000100000007000000D3D12D18556C5A4079B71C29070A354043FA92324E6B5A4033D5BC78F9023540CF23FDF8D6695A405BFB84B1DA02354072874D64E6695A40558A1D8D4305354027154B998D695A40A8684C8B710A354016FC36C4786A5A40A6272CF1800A3540D3D12D18556C5A4079B71C29070A3540', 377, 1200, 12.393460688391768, '0101000020E6100000F35A78E9CD6A5A40CA09CD980C073540', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (335, 'Ô 38', '0103000020E610000001000000070000000BD1217024685A40C9C859D8D30235400074982F2F685A40282A1BD6540A3540B8955E9B8D695A401FD7868A710A354072874D64E6695A40558A1D8D43053540037976F9D6695A4013622EA9DA023540AABBB20B06695A403AEB538EC90235400BD1217024685A40C9C859D8D3023540', 137, 680, 8.56891769386542, '0101000020E61000005550301CF9685A40A7A060DC73063540', NULL, '#e23636', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (336, 'Ô 43', '0103000020E610000001000000090000003290FFB39A5A5A40794E78DE4D01354060ADDA35215A5A40FB743C66A00235405797530262595A40F758FAD0050935409964E42CEC565A407F50172994053540633598B181565A40D91AA2EE290635402CF3565D87565A40CBBBEA01F30C3540A35560DAED575A4072DC70F2370E3540B6C09068915B5A40F681EE0F370735403290FFB39A5A5A40794E78DE4D013540', 122, 180, 23.045624726630844, '0101000020E6100000B37E685DC3585A403E608725B6083540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (337, 'Ô 32', '0103000020E61000000100000008000000A59FCEE76C5A5A400A7FC39A83133540B28174B1695C5A4066BD18CA89123540922CA9D8ED5C5A40648037E925113540823B50A73C5C5A409B1F7F69510B3540B6C09068915B5A40F681EE0F37073540A35560DAED575A4072DC70F2370E35408DD13AAA9A595A40A59E05A1BC0F3540A59FCEE76C5A5A400A7FC39A83133540', 120, 152, 25.561821987974017, '0101000020E6100000ED920781E05A5A40CDF091F6FE0D3540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (338, 'Ô 33', '0103000020E61000000100000008000000922CA9D8ED5C5A40648037E925113540CA230168295F5A40535F3DBE220B3540EEEBC039235F5A406327BC04A70A354026E4839E0D5E5A40C947676D8E023540A7954220975C5A4027A25F5B3F053540B6C09068915B5A40F681EE0F37073540823B50A73C5C5A409B1F7F69510B3540922CA9D8ED5C5A40648037E925113540', 120, 144, 22.78817419997436, '0101000020E61000001259AF286C5D5A40097EF90D81093540', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (339, 'Ô 54', '0103000020E61000000100000009000000F43AF1BB7A655A40DD530C6C22EF3440AEB6627FD9645A40F2ED5D83BEF034407061DD7877615A40B6A2CD716EEF3440989AE15F14615A406C5BE06766F03440EC681CEA77615A40043752B648F23440BA3D1D9CE3605A40F8233DF30FF83440D2E5CDE15A635A40C51A2E724FF73440245F7187B9655A4024A9B213D1F63440F43AF1BB7A655A40DD530C6C22EF3440', 377, 2767, 26.128241745346397, '0101000020E61000001032EB4E50635A400423D0FDC6F33440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (340, 'Ô 46', '0103000020E6100000010000000A000000BA3D1D9CE3605A40F8233DF30FF8344046ED7E15E0605A40AA7D3A1E33F83440CB10C7BAB8605A4091EEE714E4FB3440725751B1C1605A40976620BA13003540BD1AA034D4625A40416150A6D1003540CB38F76B33645A40F51E488DF2013540BF654E97C5655A40ECA694D74AF83440245F7187B9655A4024A9B213D1F63440D2E5CDE15A635A40C51A2E724FF73440BA3D1D9CE3605A40F8233DF30FF83440', 458, 475, 33.48081227707173, '0101000020E61000005BE45A1416635A4093C0AFF7DFFB3440', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (341, 'Ô 53', '0103000020E61000000100000006000000989AE15F14615A406C5BE06766F034407CEB4C6CA15D5A40C6BC63B807F93440F93260AFA15D5A40BDB79B400EF93440BA3D1D9CE3605A40F8233DF30FF83440EC681CEA77615A40043752B648F23440989AE15F14615A406C5BE06766F03440', 120, 407, 11.422088023004857, '0101000020E610000045F136AF03605A406D6EA4C392F53440', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (342, 'Ô 45', '0103000020E61000000100000009000000F93260AFA15D5A40BDB79B400EF93440CBD8D0CDFE5D5A40499F56D11F02354026E4839E0D5E5A40C947676D8E023540F6D1A92B9F5F5A40AE0E80B8ABFF3440725751B1C1605A40976620BA13003540CB10C7BAB8605A4091EEE714E4FB344046ED7E15E0605A40AA7D3A1E33F83440BA3D1D9CE3605A40F8233DF30FF83440F93260AFA15D5A40BDB79B400EF93440', 120, 1486, 19.562424665197792, '0101000020E6100000755000E1395F5A40C937EA378EFC3440', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (343, 'Ô 52', '0103000020E61000000100000006000000CE9256356E725A4077A8A36CDC0135407FA2B2614D735A40D42B6519E2FC344015ABBAD228725A4061819B0470F83440E0A58026756F5A40C666ECF0FCF53440920EDC6FD76F5A400B2DD91B76023540CE9256356E725A4077A8A36CDC013540', 214, 2867, 27.091273904843955, '0101000020E61000001362B82028715A40A2120032B7FC3440', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (344, 'Ô 60', '0103000020E610000001000000050000001BA034D428725A40DF1B430070F834404BCB48BDA7705A40CB9F6F0B96F23440FA635A9BC66F5A40884CF91054F53440A60A4625756F5A404F05DCF3FCF534401BA034D428725A40DF1B430070F83440', 120, 235, 4.158132744536877, '0101000020E61000005BC78BEEC6705A4009312539B2F53440', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (345, 'Ô 59', '0103000020E610000001000000090000004BCB48BDA7705A40CB9F6F0B96F23440E23D079623705A40E42F2DEA93F034404643C6A3546D5A401ADF1797AAEC34409BE8F351466C5A40AE2CD15966F134403D0E83F92B6D5A401958C7F143F53440FE65F7E4616E5A40BD8E386403F53440A60A4625756F5A404F05DCF3FCF53440FA635A9BC66F5A40884CF91054F534404BCB48BDA7705A40CB9F6F0B96F23440', 120, 413, 17.20549293963313, '0101000020E61000005A714ABE586E5A407434E930C6F13440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (346, 'Ô 51', '0103000020E610000001000000090000003D0E83F92B6D5A401958C7F143F53440E00ED4298F6E5A40CE8AA8893EFB34401BF4A5B73F6C5A408B4E965AEFFF3440D8B969334E6B5A4021037976F9023540A4FE7A85056D5A406806F1811D033540683EE76ED76F5A40118DEE2076023540A60A4625756F5A404F05DCF3FCF53440FE65F7E4616E5A40BD8E386403F534403D0E83F92B6D5A401958C7F143F53440', 171, 206, 22.78328087946272, '0101000020E61000007F26B2063B6E5A40D53959F96CFD3440', NULL, '#36e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (347, 'Ô 50', '0103000020E61000000100000008000000D8B969334E6B5A4021037976F90235401BF4A5B73F6C5A408B4E965AEFFF3440E00ED4298F6E5A40CE8AA8893EFB34403D0E83F92B6D5A401958C7F143F5344085B35BCB646A5A408066101FD8F534409510ACAA97695A404D327216F6F83440037976F9D6695A4013622EA9DA023540D8B969334E6B5A4021037976F9023540', 528, 775, 32.4704029760803, '0101000020E61000003342D090A86B5A4047DB67EC83FB3440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (348, 'Ô 58', '0103000020E61000000100000008000000D0C65BF82B6D5A4042D774F343F534409BE8F351466C5A40AE2CD15966F13440D6B6AFA3546D5A4079761F9EAAEC34401E51CC3AF66B5A40AE489D97C2EA34405BCF108E596B5A403F8F519E79ED34407C9DD497A56A5A4072361D01DCF43440F92DEECA646A5A40C10D3818D8F53440D0C65BF82B6D5A4042D774F343F53440', 234, 327, 14.163459707083778, '0101000020E6100000E3783EEBE96B5A405C3EEF7DE3F03440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (349, 'Ô 57', '0103000020E610000001000000080000001E51CC3AF66B5A40AE489D97C2EA3440C3C8F362A66A5A40DFE2A4DAEEE83440D498107349695A40EF37DA71C3EF34405F81B55894685A40C5D199D738F63440F92DEECA646A5A40C10D3818D8F534407C9DD497A56A5A4072361D01DCF434405BCF108E596B5A403F8F519E79ED34401E51CC3AF66B5A40AE489D97C2EA3440', 120, 136, 17.55487064333306, '0101000020E6100000F264572E3D6A5A4031F384291CF03440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (350, 'Ô 49', '0103000020E610000001000000080000005F81B55894685A40C5D199D738F6344088A1D5C919685A401EC6A4BF97FA3440F3D2707124685A40231DEBD0D3023540AABBB20B06695A403AEB538EC9023540CF23FDF8D6695A405BFB84B1DA0235409510ACAA97695A404D327216F6F83440F92DEECA646A5A40C10D3818D8F534405F81B55894685A40C5D199D738F63440', 120, 289, 16.257074068627052, '0101000020E61000008EAEA4DDFE685A4098A9E23C8FFC3440', NULL, '#e236e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (352, 'Ô 44', '0103000020E6100000010000000900000032D5EF699E5D5A40BDB5FD3F0FF9344073637AC2125D5A40AB4203B16CFA34403290FFB39A5A5A40794E78DE4D013540B6C09068915B5A40F681EE0F37073540A7954220975C5A4027A25F5B3F05354026E4839E0D5E5A40C947676D8E023540CBD8D0CDFE5D5A40499F56D11F023540F93260AFA15D5A40BDB79B400EF9344032D5EF699E5D5A40BDB5FD3F0FF93440', 552, 746, 20.821282827203817, '0101000020E6100000BCF37BE07E5C5A407DBAD7BDB0003540', NULL, '#3636e2', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (354, 'Ô 20', '0103000020E610000001000000070000002575029A08595A40F17EDC7EF91C354087A2409FC85A5A4087FBC8AD4917354060CAC0012D5B5A402828452BF716354075E789E76C5A5A407B12D89C831335408BA8893E1F595A401827BEDA511435404D840D4FAF565A40CBBC55D7A11A35402575029A08595A40F17EDC7EF91C3540', 120, 138, 14.738799033065558, '0101000020E6100000B31EB54C14595A4024D42F0C43183540', NULL, '#e2e236', 5);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (359, 'gh', '0103000020E6100000010000000700000005A8A9656B5B5A40F913950D6B323540EAB46E83DA5C5A4076374F75C83135402A00C633685E5A40BEA085048C2A3540419DF2E8465B5A409966BAD749213540B54E5C8E57595A40B84082E2C728354047AE9B525E595A4000FF942A5132354005A8A9656B5B5A40F913950D6B323540', 824, 2026, 46.82231515207121, '0101000020E61000007672793C845B5A405A74810F382B3540', NULL, '#36e2e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (372, 'Ô 67 A A', '0103000020E61000000100000006000000E8D6F924086A5A4037FF6D1EA0D4344052D7DAFB54695A40EC2FBB270FDB3440162D155B2E6A5A40235DEFDB69DE34400EF450DB866B5A4051F52B9D0FDB344044924C93C16B5A406B6E5778AFD73440E8D6F924086A5A4037FF6D1EA0D43440', 29, 92, 11.332927779753, '0101000020E6100000582595857F6A5A40B30E8DC582D93440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (375, 'Ô 67 B A B', '0103000020E61000000100000007000000C8CD154ACB6C5A401D71C806D2CC34404E4B0CFFF26A5A40456ABE7005CA3440B22B2D23F56A5A40DF50F86C1DCC3440E8D6F924086A5A4037FF6D1EA0D4344044924C93C16B5A406B6E5778AFD73440EE258DD13A6C5A40A297512CB7D03440C8CD154ACB6C5A401D71C806D2CC3440', 36, 63, 16.16081679158921, '0101000020E610000031F23264626B5A40F70AB14CD4D03440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (377, 'Ô 67 B B A B', '0103000020E61000000100000007000000CD30AEEB096E5A40A196D27221C43440081472243E6B5A401770C782DFBE3440A089B0E1E96A5A40456458C51BC134404E4B0CFFF26A5A40456ABE7005CA3440C8CD154ACB6C5A401D71C806D2CC344011397D3D5F6D5A4004C765DCD4C83440CD30AEEB096E5A40A196D27221C43440', 496, 1518, 22.366951235630257, '0101000020E6100000ADB8B539346C5A40FCB4D68FEEC53440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (379, 'Ô 67 B B B A B', '0103000020E61000000100000006000000D08DD46E606F5A40F28B5C81B2BA34402101A3CB9B6E5A40FDBCA94885B934407BF09B416A6C5A4041CFC446E9B63440081472243E6B5A401770C782DFBE3440CD30AEEB096E5A40A196D27221C43440D08DD46E606F5A40F28B5C81B2BA3440', 694, 1137, 25.073693271681854, '0101000020E61000005340A745506D5A40222206582FBD3440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (381, 'Ô 67 B B B B A B', '0103000020E6100000010000000800000098B5D52B33715A40A522F2B682B234409DFAECF2C06E5A4061926CA3F1AE34402BC24D46956C5A4071E2AB1DC5B534407BF09B416A6C5A4041CFC446E9B634402101A3CB9B6E5A40FDBCA94885B93440D08DD46E606F5A40F28B5C81B2BA3440705CC64D0D705A40DFA815A6EFB5344098B5D52B33715A40A522F2B682B23440', 4, 6, 22.874759434342145, '0101000020E6100000DE23FE96CB6E5A4081BED1FFB4B43440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (383, 'Ô 67 B B B B B B', '0103000020E610000001000000050000001CBF3EDA62725A40E00CA87EF8AE34407AFEB4519D6F5A40B1BFEC9E3CAC34409DFAECF2C06E5A4061926CA3F1AE344098B5D52B33715A40A522F2B682B234401CBF3EDA62725A40E00CA87EF8AE3440', 254, 738, 9.19498207345901, '0101000020E6100000B9BA94098D705A40C1AA8A4D3CAF3440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (384, 'Ô 67 A B A', '0103000020E61000000100000008000000162D155B2E6A5A40235DEFDB69DE344076A565A4DE6A5A406B274A4222E134403371222F686C5A4012A47D6CC5E33440EFF340AD476E5A4044839D2D63DB34409F573CF5486D5A40A298BC0166DA344044924C93C16B5A406B6E5778AFD734400EF450DB866B5A4051F52B9D0FDB3440162D155B2E6A5A40235DEFDB69DE3440', 14, 39, 19.79605371871738, '0101000020E6100000DD40976C336C5A40A1562CA1DADD3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (387, 'Ô 67 B A A B', '0103000020E61000000100000009000000264E427716705A40B5122F5959D23440861C5BCF106E5A40F1B913ECBFCE3440C8CD154ACB6C5A401D71C806D2CC3440EE258DD13A6C5A40A297512CB7D0344044924C93C16B5A406B6E5778AFD734409F573CF5486D5A40A298BC0166DA3440EFF340AD476E5A4044839D2D63DB34404B051555BF6F5A40E25817B7D1D43440264E427716705A40B5122F5959D23440', 10, 31, 30.900254914004773, '0101000020E6100000D2059841BC6D5A40279559CB4ED43440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (393, 'Ô 67 B B B B A A B', '0103000020E610000001000000070000001E623AAFFC735A4056057C14B4B73440FFB0A54753725A40A5A31CCC26B4344098B5D52B33715A40A522F2B682B23440705CC64D0D705A40DFA815A6EFB53440D08DD46E606F5A40F28B5C81B2BA34406092C55BB9725A4052717932D3BF34401E623AAFFC735A4056057C14B4B73440', 4, 9, 28.453173280589162, '0101000020E61000005D0D9E25B9715A404C75821507B93440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (395, 'Ô 67 B B B B B A B', '0103000020E6100000010000000700000003840C6DEB745A40868331E0B4B13440A29BFD8172745A4082C476F700B134401CBF3EDA62725A40E00CA87EF8AE344098B5D52B33715A40A522F2B682B23440FFB0A54753725A40A5A31CCC26B434401E623AAFFC735A4056057C14B4B7344003840C6DEB745A40868331E0B4B13440', 333, 955, 13.336284791907392, '0101000020E6100000A963317436735A40333A355AD0B23440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (396, 'Ô 67 A B B A', '0103000020E610000001000000070000003371222F686C5A4012A47D6CC5E33440B1F3DB7C886E5A401776A43C6BE73440D3FA5B02F0705A40BA11161571E23440FC507BA788715A408F3C1ACB97DE3440E7C2482F6A715A4065389ECF80DE3440EFF340AD476E5A4044839D2D63DB34403371222F686C5A4012A47D6CC5E33440', 781, 1577, 28.005408545262505, '0101000020E61000006F761551EB6E5A40222A598C4CE13440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (399, 'Ô 67 B A A A B', '0103000020E61000000100000009000000F346DE20B7725A40766B6E8CEAD53440A3E8818FC1715A40AD8A709351D53440264E427716705A40B5122F5959D234404B051555BF6F5A40E25817B7D1D43440EFF340AD476E5A4044839D2D63DB3440E7C2482F6A715A4065389ECF80DE3440FC507BA788715A408F3C1ACB97DE3440D384ED2763725A406090F46915D93440F346DE20B7725A40766B6E8CEAD53440', 11, 32, 24.264886478488787, '0101000020E6100000CD496920A2705A40EF391A72DCD83440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (401, 'Ô 67 B B A A A B', '0103000020E61000000100000007000000A11F316D04745A401010C4609BCB3440765EF3424B715A4059309B4798C93440264E427716705A40B5122F5959D23440A3E8818FC1715A40AD8A709351D53440F346DE20B7725A40766B6E8CEAD53440BA11161571735A40784485EAE6CE3440A11F316D04745A401010C4609BCB3440', 292, 624, 23.54916598469842, '0101000020E6100000AD80B80D01725A40C0E6B09F92CF3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (404, 'Ô 67 B B B B A A A A', '0103000020E610000001000000080000000F0B0135DF795A406850EB3829CA3440AF0AD462F0795A401F0E12A27CC934405AB6CCA5157B5A4013DAC82E7EC234401C7DCC0704765A404EEE77280ABC34400DD277AAE8755A409663E7AACFBB3440FD80492242755A40EA3DAC6F94C23440666A12BC21775A40C2DEC4909CC434400F0B0135DF795A406850EB3829CA3440', 61, 162, 31.68695766159358, '0101000020E6100000DB23B4E727785A40B3ECCFB9A9C23440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (405, 'Ô 67 B B B B A A A B', '0103000020E610000001000000060000000DD277AAE8755A409663E7AACFBB34401E623AAFFC735A4056057C14B4B734406092C55BB9725A4052717932D3BF34406A6CAF05BD725A40978E39CFD8BF3440FD80492242755A40EA3DAC6F94C234400DD277AAE8755A409663E7AACFBB3440', 15, 20, 16.07719337120824, '0101000020E6100000AFF63E8868745A4070EBEA6F82BD3440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (406, 'Ô 67 B B B B B A A A', '0103000020E610000001000000070000005AB6CCA5157B5A4013DAC82E7EC234408FC6A17E177C5A407A1C06F357BC34403674B33F50785A40A3E8818FC1B6344022D6EF7DA2765A400E59B92442B434400DD277AAE8755A409663E7AACFBB34401C7DCC0704765A404EEE77280ABC34405AB6CCA5157B5A4013DAC82E7EC23440', 483, 985, 34.79666936400401, '0101000020E6100000A0BE9076DF785A40ACFF54989FBB3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (407, 'Ô 67 B B B B B A A B', '0103000020E6100000010000000500000022D6EF7DA2765A400E59B92442B4344003840C6DEB745A40868331E0B4B134401E623AAFFC735A4056057C14B4B734400DD277AAE8755A409663E7AACFBB344022D6EF7DA2765A400E59B92442B43440', 38, 99, 12.194719264976797, '0101000020E610000058542E2B5F755A409A2B169082B63440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (408, 'Ô 67 A B B B A', '0103000020E61000000100000008000000B1F3DB7C886E5A401776A43C6BE73440361D01DC2C6F5A404583143C85E83440F9B9B8C530715A40E62A9CF878EB3440F0517FBDC2725A40677BF486FBE43440B8BD98BE5B735A40106F5E1BF8DF3440FC507BA788715A408F3C1ACB97DE3440D3FA5B02F0705A40BA11161571E23440B1F3DB7C886E5A401776A43C6BE73440', 109, 262, 23.324706063061363, '0101000020E6100000EDEE409E3B715A4044750A191EE53440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (411, 'Ô 67 B A A A A B', '0103000020E61000000100000007000000773EFC2FA9745A40C0AD81CE20D73440F346DE20B7725A40766B6E8CEAD53440D384ED2763725A406090F46915D93440FC507BA788715A408F3C1ACB97DE3440B8BD98BE5B735A40106F5E1BF8DF3440D40E7F4DD6735A40BFF38B12F4DB3440773EFC2FA9745A40C0AD81CE20D73440', 25, 82, 13.89787740690313, '0101000020E6100000277913B812735A40F1990B5EDFDA3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (412, 'Ô 67 B B A A A A A', '0103000020E6100000010000000700000027EA3C92C1775A4040D7930002DA3440D8648D7A88785A4069AD68739CD7344004E7AD3656795A40EFBBC68789CF344072FD28DB41775A406B781A3300CE3440904B8ECEC8755A40C93A89F9D3D7344027DA5548F9755A408AE6012CF2D7344027EA3C92C1775A4040D7930002DA3440', 359, 359, 20.617712572766845, '0101000020E6100000CACD3142A2775A400867CFF8FDD33440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (413, 'Ô 67 B B A A A A B', '0103000020E6100000010000000600000072FD28DB41775A406B781A3300CE3440A11F316D04745A401010C4609BCB3440BA11161571735A40784485EAE6CE3440F346DE20B7725A40766B6E8CEAD53440904B8ECEC8755A40C93A89F9D3D7344072FD28DB41775A406B781A3300CE3440', 399, 1285, 28.782056703032136, '0101000020E6100000764E7D2EE8745A40F9082C93BCD13440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (414, 'Ô 67 B B B A A A A A', '0103000020E6100000010000000500000004E7AD3656795A40EFBBC68789CF34400F0B0135DF795A406850EB3829CA34405EDB27BC4E785A402B1C972AFEC6344072FD28DB41775A406B781A3300CE344004E7AD3656795A40EFBBC68789CF3440', 2, 5, 10.636003310008247, '0101000020E61000007611CFB0A2785A409BC1A55CAFCB3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (416, 'Ô 67 A B B B B A', '0103000020E61000000100000007000000F9B9B8C530715A40E62A9CF878EB3440906EBEF0EE735A40B4EB348B7DEF344021753BFBCA735A40A913D044D8E8344009045DA2AA745A40009183B4F4E03440B8BD98BE5B735A40106F5E1BF8DF3440F0517FBDC2725A40677BF486FBE43440F9B9B8C530715A40E62A9CF878EB3440', 332, 606, 19.873741970976724, '0101000020E61000001C54CC3624735A40B3A21510EEE73440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (418, 'Ô 67 B A A A A A A', '0103000020E610000001000000080000004A0C582BA0755A40D7F8D5E7ADE134403DBB7CEBC3755A40BDFF8F1326E0344027EA3C92C1775A4040D7930002DA344027DA5548F9755A408AE6012CF2D73440904B8ECEC8755A40C93A89F9D3D73440702711E15F755A40AA99B51490DA344009045DA2AA745A40009183B4F4E034404A0C582BA0755A40D7F8D5E7ADE13440', 106, 303, 11.335168301587556, '0101000020E6100000537C6ED902765A40B91937DF63DC3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (419, 'Ô 67 B A A A A A B', '0103000020E61000000100000007000000904B8ECEC8755A40C93A89F9D3D73440773EFC2FA9745A40C0AD81CE20D73440D40E7F4DD6735A40BFF38B12F4DB3440B8BD98BE5B735A40106F5E1BF8DF344009045DA2AA745A40009183B4F4E03440702711E15F755A40AA99B51490DA3440904B8ECEC8755A40C93A89F9D3D73440', 4, 9, 9.794648384466099, '0101000020E6100000FE0699718E745A40937E3ACB16DC3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (420, 'Ô 67 A B B B B B A', '0103000020E61000000100000008000000906EBEF0EE735A40B4EB348B7DEF3440CE076E1E93745A409E85810A6EF03440BB4916743E765A40DBECFE6783E834406F2BBD361B755A40CF49EF1B5FE734404A0C582BA0755A40D7F8D5E7ADE1344009045DA2AA745A40009183B4F4E0344021753BFBCA735A40A913D044D8E83440906EBEF0EE735A40B4EB348B7DEF3440', 3, 5, 16.625035668985912, '0101000020E61000004873415AC4745A40311B2AADE9E83440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (421, 'Ô 67 A B B B B B B', '0103000020E61000000100000006000000CE076E1E93745A409E85810A6EF03440A2258FA7E5755A406B9E23F25DF23440A56ABB09BE775A403FE0810184F3344082E15CC30C785A4058E2016553EA3440BB4916743E765A40DBECFE6783E83440CE076E1E93745A409E85810A6EF03440', 174, 437, 20.016413662399085, '0101000020E6100000F23AD38895765A40D350730B40EE3440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (422, 'th', '0103000020E61000000100000005000000373465A71F665A404221020EA1E234407C8159A148695A40FCE1E7BF07E7344076A565A4DE6A5A406B274A4222E1344052D7DAFB54695A40EC2FBB270FDB3440373465A71F665A404221020EA1E23440', 523, 1359, 22.966947829113835, '0101000020E61000003CC55F91C4685A404235699968E13440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (424, 'th', '0103000020E610000001000000070000007C8159A148695A40FCE1E7BF07E7344004392861A66A5A403ECBF3E0EEE83440A46FD234286B5A40A69883A0A3E93440DAC534D3BD6C5A403EEAAF5758E434404242942F686C5A40C53C2B69C5E3344076A565A4DE6A5A406B274A4222E134407C8159A148695A40FCE1E7BF07E73440', 4, 13, 12.217552806728948, '0101000020E610000067317972026B5A402320035C7DE53440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (425, 'uu', '0103000020E610000001000000050000003D2AFEEF886C5A40757286E28EEB3440B328ECA2E86D5A405512D90759E634404B395FECBD6C5A4020D1048A58E43440A46FD234286B5A40A69883A0A3E934403D2AFEEF886C5A40757286E28EEB3440', 17, 24, 7.758350892220704, '0101000020E61000002092A335916C5A40A2DEDB4602E83440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (427, 'Big A B B B A B B A', '0103000020E610000001000000060000001BA034D428725A40DF1B430070F834408F56B5A4A3715A402BA5677A89F534408CBB41B456715A40BFB9BF7ADCF3344055320054716F5A40ACFE08C380F53440A60A4625756F5A404F05DCF3FCF534401BA034D428725A40DF1B430070F83440', 81, 161, 3.9703307694119365, '0101000020E610000012EE35D9E8705A4015DEA18C03F63440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (431, 'gh', '0103000020E610000001000000060000001BA034D428725A40DF1B430070F834408CBB41B456715A40BFB9BF7ADCF33440E23D079623705A40E42F2DEA93F03440F96871C630715A40C85EEFFE78EB344073D6A71C93745A400917F2086EF034401BA034D428725A40DF1B430070F83440', 619, 906, 19.277671153386116, '0101000020E6100000352B3CAE36725A4000143C8151F13440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (432, 'hj', '0103000020E6100000010000000600000073D6A71C93745A400917F2086EF03440A2258FA7E5755A406B9E23F25DF23440A56ABB09BE775A403FE0810184F334407FA2B2614D735A40D42B6519E2FC34401BA034D428725A40DF1B430070F8344073D6A71C93745A400917F2086EF03440', 4, 5, 24.787990897383146, '0101000020E610000045D01F9C92745A40646F44A742F63440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (434, 'Ô 67 B B B B B A A B (Copy)', '0103000020E61000000100000009000000A77686A92D7F5A403E03EACDA8013540E8120EBDC57D5A4097395D1613FF3440E5EFDE51637D5A40FEB5BC72BDFD34402F8672A25D7D5A40A33B889D29FC3440D3122BA3917B5A40323B8BDEA90435408A90BA9D7D7D5A407D76C075C5083540F20C1AFA27805A4024B55032390D354046CEC29E76805A40F06DFAB31F093540A77686A92D7F5A403E03EACDA8013540', 5, 11, 26.79957880364935, '0101000020E61000009470ED94267E5A40E024697238053540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (435, 'Ô 67 B B A B (Copy)', '0103000020E6100000010000000800000003CDE7DCED715A4071C6302768273540CFA44DD53D6E5A402C11A8FE411C3540FB57569A946C5A40965F0663442235403F541A31B36C5A40A1BFD023462B354033FD12F1D66E5A409241EE224C2D3540C4CE143AAF705A404DA3C9C5183035406138D73043715A404B3B35971B2C354003CDE7DCED715A4071C6302768273540', 46, 64, 44.451852853991866, '0101000020E61000000A0EEF95006F5A404339FE26BD263540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (436, 'Ô 67 B B B A B (Copy)', '0103000020E61000000100000007000000ADA1D45E44735A4086E28E37F91D3540ACA92C0ABB735A4002F566D47C1935406C76A4FACE715A40793D98141F17354014AE47E17A6F5A40357C0BEBC6173540CFA44DD53D6E5A402C11A8FE411C354003CDE7DCED715A4071C6302768273540ADA1D45E44735A4086E28E37F91D3540', 66, 83, 35.44840696480608, '0101000020E61000009715976B2E715A406A978CFF801D3540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (437, 'Ô 67 B B A A A B (Copy)', '0103000020E61000000100000007000000304AD05FE8775A40A4A7C821E22E3540E831CA332F755A4052B5DD04DF2C3540BB09BE69FA735A40C05C8B16A0353540F3E7DB82A5755A40F4FE3F4E983835406E52D158FB785A4013286211C33A3540C630276893795A40A54929E8F62E3540304AD05FE8775A40A4A7C821E22E3540', 24, 44, 37.259775688598154, '0101000020E61000008B076BDDF1765A4069EF426AB9333540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (439, 'Ô 67 B B B A A A A B (Copy)', '0103000020E61000000100000007000000FB57569A946C5A40965F06634422354057B08D78B26B5A40B0AA5E7EA7213540CF2EDFFAB06A5A40BED9E6C6F420354045D61A4AED695A4042B3EBDE8A2435400F643DB5FA685A4096CB46E7FC2835403F541A31B36C5A40A1BFD023462B3540FB57569A946C5A40965F066344223540', 108, 240, 17.77852886967671, '0101000020E61000005838BF90306B5A40F97EDEBE53263540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (445, 'Ô 67 B B B B A A A B (Copy)', '0103000020E610000001000000080000008A90BA9D7D7D5A407D76C075C5083540D3122BA3917B5A40323B8BDEA9043540EFFFE384097A5A40DCF29194F4103540404B57B08D7A5A40AEF02E17F1113540EDB94C4D827B5A40E7C2482F6A13354074ED0BE8857E5A40CF13CFD902123540F20C1AFA27805A4024B55032390D35408A90BA9D7D7D5A407D76C075C5083540', 748, 1717, 35.104970601547954, '0101000020E61000001AABA940BB7C5A40B45A7C67570D3540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (447, 'Ô 67 B B B B B B (Copy)', '0103000020E61000000100000007000000D1AE42CA4F7A5A403318231285FA3440EE974F560C7A5A40D882DE1B43F834404B92E7FA3E795A40D2C8E7154FF53440A56ABB09BE775A403FE0810184F334407FA2B2614D735A40D42B6519E2FC34406AA33A1DC8785A40C2A1B77878FF3440D1AE42CA4F7A5A403318231285FA3440', 5, 14, 32.75022761059594, '0101000020E61000001ED44E0564775A405C544C8721FA3440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (452, 'Ô 67 B B B A A A B (Copy)', '0103000020E6100000010000000A0000001344DD07207A5A4093A8177C9A2B35409DF2E846587A5A40F9122A38BC28354024D1CB28967A5A40BEFA78E8BB233540823AE5D18D775A400F80B8AB571D3540249D819197765A40A0F99CBB5D233540CE88D2DEE0755A407520EBA9D5273540E831CA332F755A4052B5DD04DF2C3540304AD05FE8775A40A4A7C821E22E3540C630276893795A40A54929E8F62E35401344DD07207A5A4093A8177C9A2B3540', 194, 642, 42.51255163255763, '0101000020E610000084B211291A785A40546F2B5F8A273540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (454, 'Ô 67 B B B B B A B (Copy)', '0103000020E610000001000000070000002F8672A25D7D5A40A33B889D29FC3440F5D6C056097C5A40E7E3DA5031FA3440D1AE42CA4F7A5A403318231285FA34406AA33A1DC8785A40C2A1B77878FF3440069D103AE8795A40CEFFAB8E1C013540D3122BA3917B5A40323B8BDEA90435402F8672A25D7D5A40A33B889D29FC3440', 262, 867, 18.697203806012155, '0101000020E610000079FBABE72C7B5A40578900AB91FE3440', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (455, 'Ô 67 B B B A A B (Copy)', '0103000020E61000000100000009000000823AE5D18D775A400F80B8AB571D3540B8205B96AF755A4006F4C29D0B1B3540ACA92C0ABB735A4002F566D47C193540ADA1D45E44735A4086E28E37F91D354003CDE7DCED715A4071C63027682735409274CDE49B745A409607E929722C3540E831CA332F755A4052B5DD04DF2C3540CE88D2DEE0755A407520EBA9D5273540823AE5D18D775A400F80B8AB571D3540', 1045, 1771, 43.598208790474416, '0101000020E61000004B58C1C4A9745A40833BA8E7C2223540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (456, 'Ô 67 B B B B A A B (Copy)', '0103000020E61000000100000007000000D3122BA3917B5A40323B8BDEA9043540069D103AE8795A40CEFFAB8E1C0135406AA33A1DC8785A40C2A1B77878FF344077483140A2775A400805A568E50235403ACE6DC2BD765A40266F8099EF0C3540EFFFE384097A5A40DCF29194F4103540D3122BA3917B5A40323B8BDEA9043540', 220, 324, 36.716026306889056, '0101000020E610000046CD95C01F795A40AFC0704A32083540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (457, 'Ô 67 B B A A B (Copy)', '0103000020E61000000100000008000000E831CA332F755A4052B5DD04DF2C35409274CDE49B745A409607E929722C354003CDE7DCED715A4071C63027682735406138D73043715A404B3B35971B2C3540C4CE143AAF705A404DA3C9C518303540D61BB5C2F4715A40382EE3A606323540BB09BE69FA735A40C05C8B16A0353540E831CA332F755A4052B5DD04DF2C3540', 319, 391, 23.893755387976647, '0101000020E6100000217CCC36ED725A4050903F3B902E3540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (462, 'yu A', '0103000020E61000000100000006000000ACA92C0ABB735A4002F566D47C193540B8205B96AF755A4006F4C29D0B1B3540823AE5D18D775A400F80B8AB571D3540C79F875EAF785A406F57104CB3173540D816B27B51755A4053CF8250DE123540ACA92C0ABB735A4002F566D47C193540', 46, 56, 22.012522539769712, '0101000020E6100000A551B34A46765A40817255ED37183540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (463, 'yu B', '0103000020E61000000100000005000000C79F875EAF785A406F57104CB3173540EFFFE384097A5A40DCF29194F41035403ACE6DC2BD765A40266F8099EF0C3540D816B27B51755A4053CF8250DE123540C79F875EAF785A406F57104CB3173540', 44, 50, 22.093421936192836, '0101000020E610000023E1AF8FB6775A40CA0AD38E2D123540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (464, 'h A', '0103000020E610000001000000050000006C76A4FACE715A40793D98141F173540ACA92C0ABB735A4002F566D47C193540D816B27B51755A4053CF8250DE1235406C76A4FACE715A40B7480AC7D40D35406C76A4FACE715A40793D98141F173540', 3, 3, 19.89426064743328, '0101000020E61000003C33E38B31735A4018A93C55E9133540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (466, 'Big A B B A A B A', '0103000020E61000000100000009000000CFA44DD53D6E5A402C11A8FE411C354014AE47E17A6F5A40357C0BEBC61735406C76A4FACE715A40793D98141F1735406C76A4FACE715A407B116DC7D40D3540FF774485EA6E5A40F4FA93F8DC113540FF774485EA6E5A40F4FA93F8DC113540F7578FFB566E5A40C8B1F50CE1103540F4DDAD2CD16D5A40B247A81952153540CFA44DD53D6E5A402C11A8FE411C3540', 91, 91, 22.129650486780168, '0101000020E61000004B8432DEE06F5A400631A1C56D143540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (468, 'j A', '0103000020E6100000010000000500000073D9E89C9F795A40BC41B456B421354026BB7B7B957A5A40E08F03F86C1A3540C79F875EAF785A406F57104CB3173540823AE5D18D775A400F80B8AB571D354073D9E89C9F795A40BC41B456B4213540', 56, 112, 13.397521829959587, '0101000020E6100000DCDED48A1F795A4006DD07A16E1C3540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (469, 'j B', '0103000020E6100000010000000600000026BB7B7B957A5A40E08F03F86C1A3540EDB94C4D827B5A40E7C2482F6A133540404B57B08D7A5A40AEF02E17F1113540EFFFE384097A5A40DCF29194F4103540C79F875EAF785A406F57104CB317354026BB7B7B957A5A40E08F03F86C1A3540', 6, 9, 11.715391468609884, '0101000020E61000007D648B482C7A5A4001F32DCEC3153540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (470, 'Ô 67 B B B A A A B A', '0103000020E61000000100000006000000FD80492242755A40EA3DAC6F94C234406A6CAF05BD725A40978E39CFD8BF34406092C55BB9725A4052717932D3BF34407BD0075943725A400A32C00DCAC2344056034BB0E3745A40A5B132246BC63440FD80492242755A40EA3DAC6F94C23440', 84, 259, 8.16429663071656, '0101000020E61000007AEEE8C8D2735A40A04E3CBFF9C23440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (471, 'Ô 67 B B B A A A B B', '0103000020E610000001000000070000007BD0075943725A400A32C00DCAC234407F8978EBFC715A402EAC1BEF8EC43440765EF3424B715A4059309B4798C93440A11F316D04745A401010C4609BCB344091B75CFDD8745A40317BD976DAC6344056034BB0E3745A40A5B132246BC634407BD0075943725A400A32C00DCAC23440', 37, 113, 15.206766889490627, '0101000020E6100000384DE9ED10735A40EF0265FA83C73440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (472, 'Ô 67 B B B A A A A B A', '0103000020E610000001000000060000005EDB27BC4E785A402B1C972AFEC63440666A12BC21775A40C2DEC4909CC43440FD80492242755A40EA3DAC6F94C2344056034BB0E3745A40A5B132246BC63440516A09DBCA775A40DAC6FD196ECA34405EDB27BC4E785A402B1C972AFEC63440', 89, 114, 11.10295158559119, '0101000020E61000000F53872E94765A40E39AB4E16EC63440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (473, 'Ô 67 B B B A A A A B B', '0103000020E6100000010000000600000056034BB0E3745A40A5B132246BC6344091B75CFDD8745A40317BD976DAC63440A11F316D04745A401010C4609BCB344072FD28DB41775A406B781A3300CE3440516A09DBCA775A40DAC6FD196ECA344056034BB0E3745A40A5B132246BC63440', 64, 181, 12.640306139635705, '0101000020E6100000FDF8F462E5755A40787105DD87CA3440', NULL, '#e2369d', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (474, 'gh A', '0103000020E6100000010000000A0000005F96766A4E535A4080B6D5ACB326354061FBC9181F535A403BC5AA41982735406F9C14E63D545A402B85402E71303540B9C3263273555A409B012EC896313540147B681F2B565A406E68CA4E3F343540BD35B05582575A4027C0B0FCF9323540419AB1683A585A40A2293BFDA032354047AE9B525E595A4000FF942A513235405AC120FD57595A40267037FD632935405F96766A4E535A4080B6D5ACB3263540', 102, 198, 47.24774308668213, '0101000020E61000004B66AC227C565A400A8604581B2D3540', NULL, '#367be2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (475, 'gh B', '0103000020E610000001000000090000005AC120FD57595A40267037FD63293540B54E5C8E57595A40B84082E2C7283540419DF2E8465B5A409966BAD74921354012FB04508C585A4012BC218D0A1C35404D840D4FAF565A40CBBC55D7A11A3540381092054C555A40E9D2BF2495193540F94A202576545A4049B9FB1C1F2135405F96766A4E535A4080B6D5ACB32635405AC120FD57595A40267037FD63293540', 1478, 3098, 62.03990108195201, '0101000020E61000006A04608041575A400B2A01381A223540', NULL, '#367be2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (476, 'Big A A B B A A A A A', '0103000020E61000000100000005000000C3C8F362A66A5A40DFE2A4DAEEE83440F15331A248695A40DE904BBE07E734408CF36F4B8F685A40A0A2D67353EB34400664AABEA5695A4053326BEFF4ED3440C3C8F362A66A5A40DFE2A4DAEEE83440', 109, 198, 6.213758439139957, '0101000020E6100000A39F4CD28F695A404704A5AE50EA3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (477, 'Big A A B B A A A A B', '0103000020E610000001000000070000008CF36F4B8F685A40A0A2D67353EB3440ADA7565F5D685A409D499BAA7BEC34402829132B21675A40AF594F2986F634405F81B55894685A40C5D199D738F63440D498107349695A40EF37DA71C3EF34400664AABEA5695A4053326BEFF4ED34408CF36F4B8F685A40A0A2D67353EB3440', 228, 449, 10.966213147683867, '0101000020E610000028988B7369685A407BAC79BB6FF13440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (478, 'Big A A B A B A A A A', '0103000020E610000001000000060000001E51CC3AF66B5A40AE489D97C2EA3440C3C8F362A66A5A40DFE2A4DAEEE834400664AABEA5695A4053326BEFF4ED34402F663772FE6A5A4061B0A6A836F134405BCF108E596B5A403F8F519E79ED34401E51CC3AF66B5A40AE489D97C2EA3440', 177, 443, 7.669228986548772, '0101000020E610000078AFCAF3C66A5A402C8ECFC0C2EC3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (479, 'Big A A B A B A A A B', '0103000020E610000001000000070000000664AABEA5695A4053326BEFF4ED3440D498107349695A40EF37DA71C3EF34405F81B55894685A40C5D199D738F63440F92DEECA646A5A40C10D3818D8F534407C9DD497A56A5A4072361D01DCF434402F663772FE6A5A4061B0A6A836F134400664AABEA5695A4053326BEFF4ED3440', 204, 578, 9.88565617143015, '0101000020E6100000D34E7048D2695A4060341C6FB5F23440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (480, 'y A', '0103000020E610000001000000090000003C6A4C88B9655A406B28B517D1F63440A873452921675A40DF89592F86F63440ADA7565F5D685A409D499BAA7BEC34401C67594B8F685A40F9CC9E7353EB34409168677092655A40E7B53A8219E43440A741D13C80645A406B7F677BF4E634402CEFAA07CC655A40FC010F0C20EC3440EB0088BB7A655A407D923B6C22EF34403C6A4C88B9655A406B28B517D1F63440', 673, 673, 31.999231665589125, '0101000020E61000009441131E8D665A40E70E93217BED3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (481, 'y B', '0103000020E610000001000000050000001C67594B8F685A40F9CC9E7353EB34407C8159A148695A40FCE1E7BF07E73440373465A71F665A404221020EA1E234409168677092655A40E7B53A8219E434401C67594B8F685A40F9CC9E7353EB3440', 99, 213, 10.177457927703717, '0101000020E6100000442E709F93675A4039C4B165ABE63440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (482, 'h B A', '0103000020E61000000100000006000000D816B27B51755A4053CF8250DE1235403ACE6DC2BD765A40266F8099EF0C35404CDF6B088E755A40D1AE42CA4F0A35401BF27EC5E2745A40A1517D91170935405B42485A8D735A404BD7326A55103540D816B27B51755A4053CF8250DE123540', 90, 293, 13.354605779588171, '0101000020E6100000D4D3A8AA20755A40E2AD8A40290E3540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (483, 'h B B', '0103000020E610000001000000070000001BF27EC5E2745A40A1517D9117093540DEC66647AA735A40D6C743DFDD063540034015376E725A40EE3D5C72DC0135406C76A4FACE715A40118AADA0690535406C76A4FACE715A40B7480AC7D40D35405B42485A8D735A404BD7326A551035401BF27EC5E2745A40A1517D9117093540', 449, 1418, 20.958538749700253, '0101000020E6100000AED4BA4F03735A40A80405F0C6093540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (484, 'Ô 67 B B B B A B (Copy) A', '0103000020E610000001000000070000006AA33A1DC8785A40C2A1B77878FF344021474AE5D3765A4017A282448CFE34401BF27EC5E2745A40A1517D91170935404CDF6B088E755A40D1AE42CA4F0A35403ACE6DC2BD765A40266F8099EF0C354077483140A2775A400805A568E50235406AA33A1DC8785A40C2A1B77878FF3440', 3, 5, 18.81671204448487, '0101000020E610000069D7CC2FA8765A401FFFE8CA34053540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (485, 'Ô 67 B B B B A B (Copy) B', '0103000020E6100000010000000600000021474AE5D3765A4017A282448CFE34407FA2B2614D735A40D42B6519E2FC3440034015376E725A40EE3D5C72DC013540DEC66647AA735A40D6C743DFDD0635401BF27EC5E2745A40A1517D911709354021474AE5D3765A4017A282448CFE3440', 103, 296, 25.23580654653686, '0101000020E610000066251F2D7F745A4017EFF14E13023540', NULL, '#c036e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (486, 'Big A A B B A A B B A', '0103000020E61000000100000007000000245F7187B9655A4024A9B213D1F63440BF654E97C5655A40ECA694D74AF834403C8EAA1C36655A40FF9E04A8BCFB3440451F63569E665A40A276B5987CFB344082397AFCDE665A404912842BA0F834402829132B21675A40AF594F2986F63440245F7187B9655A4024A9B213D1F63440', 23, 38, 5.029719337438172, '0101000020E6100000B9F1A14435665A409F3B85AE29F93440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (487, 'Big A A B B A A B B B', '0103000020E610000001000000060000003C8EAA1C36655A40FF9E04A8BCFB3440CB38F76B33645A40F51E488DF2013540C97553CA6B655A4000FDBE7FF30235402A216C39F6655A40F8A80634ED023540451F63569E665A40A276B5987CFB34403C8EAA1C36655A40FF9E04A8BCFB3440', 214, 299, 9.23691377599312, '0101000020E61000008051AE987D655A401994BB764AFF3440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (488, 'Big A A B B A A A B A', '0103000020E610000001000000070000002829132B21675A40AF594F2986F6344082397AFCDE665A404912842BA0F83440451F63569E665A40A276B5987CFB34401C41719A1A685A4072B009F938FB344088A1D5C919685A401EC6A4BF97FA34405F81B55894685A40C5D199D738F634402829132B21675A40AF594F2986F63440', 1, 3, 5.765959532156392, '0101000020E6100000D6587C2595675A4090AF5054DDF83440', NULL, '#c0e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (489, 'Big A A B B A A A B B', '0103000020E61000000100000005000000451F63569E665A40A276B5987CFB34402A216C39F6655A40F8A80634ED023540F3D2707124685A40231DEBD0D30235401C41719A1A685A4072B009F938FB3440451F63569E665A40A276B5987CFB3440', 163, 201, 11.124996884782313, '0101000020E610000057A54D9633675A40F9CEC33A5BFF3440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (490, 'Big A A B A B A A B A', '0103000020E610000001000000070000005F81B55894685A40C5D199D738F6344088A1D5C919685A401EC6A4BF97FA34401C41719A1A685A4072B009F938FB34409DF0E262A4695A40C51A03F2F2FA34409510ACAA97695A404D327216F6F83440F92DEECA646A5A40C10D3818D8F534405F81B55894685A40C5D199D738F63440', 22, 41, 6.118363785067478, '0101000020E6100000620C333617695A40CB9D36997FF83440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (491, 'Big A A B A B A A B B', '0103000020E610000001000000060000001C41719A1A685A4072B009F938FB3440F3D2707124685A40231DEBD0D3023540AABBB20B06695A403AEB538EC9023540CF23FDF8D6695A405BFB84B1DA0235409DF0E262A4695A40C51A03F2F2FA34401C41719A1A685A4072B009F938FB3440', 2, 2, 10.13872969129885, '0101000020E610000025A0E12BF0685A4085EBB5BA02FF3440', NULL, '#e23636', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (492, 'bb A', '0103000020E61000000100000007000000A4FEC6136B6F5A404C9C8E60E0E83440361D01DC2C6F5A404583143C85E83440B328ECA2E86D5A405512D90759E634403D2AFEEF886C5A40757286E28EEB34404643C6A3546D5A401ADF1797AAEC344040556E6A0C6F5A40DB0F7B180FEF3440A4FEC6136B6F5A404C9C8E60E0E83440', 38, 107, 11.375075946667343, '0101000020E61000009162A8DF2D6E5A40E4FF8189ABEA3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (493, 'bb B', '0103000020E6100000010000000500000040556E6A0C6F5A40DB0F7B180FEF3440E23D079623705A40E42F2DEA93F03440F96871C630715A40C85EEFFE78EB3440A4FEC6136B6F5A404C9C8E60E0E8344040556E6A0C6F5A40DB0F7B180FEF3440', 46, 151, 7.725555973241547, '0101000020E61000000A2D1CD9F96F5A40BD174C3CC4EC3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (494, 'Big A B B B B A A B A', '0103000020E61000000100000009000000E23D079623705A40E42F2DEA93F03440774D486B0C6F5A404C38F4160FEF34407E569929AD6E5A4041834D9D47F53440A60A4625756F5A404F05DCF3FCF5344055320054716F5A40ACFE08C380F534406C938AC6DA705A406A300DC347F434408CBB41B456715A40BFB9BF7ADCF33440FA0967B796705A403DF20703CFF13440E23D079623705A40E42F2DEA93F03440', 9, 23, 6.972617770905599, '0101000020E61000007EB421A6BB6F5A4026A27F56D4F23440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (495, 'Big A B B B B A A B B', '0103000020E61000000100000007000000A5AD476A0C6F5A4022310C1B0FEF3440D6B6AFA3546D5A4079761F9EAAEC34409BE8F351466C5A40AE2CD15966F13440D0C65BF82B6D5A4042D774F343F53440FE65F7E4616E5A40BD8E386403F53440A62CBA2AAD6E5A40C4975EA247F53440A5AD476A0C6F5A4022310C1B0FEF3440', 2, 3, 13.13929101084163, '0101000020E610000020381C5DBD6D5A408E4E65C34CF13440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (496, 'Ô 67 B B A A B A', '0103000020E61000000100000006000000765EF3424B715A4059309B4798C93440437573F1B7705A404F93196F2BC9344092765CBAED6F5A408F4B1F31AFC73440625C95372C6E5A401AE8F3B4F0CE3440264E427716705A40B5122F5959D23440765EF3424B715A4059309B4798C93440', 159, 266, 13.600352491555352, '0101000020E61000003A86407BD16F5A404EEEF11AFACC3440', NULL, '#5936e2', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (497, 'Ô 67 B B A A B B', '0103000020E6100000010000000700000092765CBAED6F5A408F4B1F31AFC73440CD30AEEB096E5A40A196D27221C4344011397D3D5F6D5A4004C765DCD4C83440C8CD154ACB6C5A401D71C806D2CC3440861C5BCF106E5A40F1B913ECBFCE3440625C95372C6E5A401AE8F3B4F0CE344092765CBAED6F5A408F4B1F31AFC73440', 77, 134, 13.946699221937976, '0101000020E610000062D8B80B466E5A4025F457AFA3C93440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (498, 'Ô 67 B B B A A B A', '0103000020E610000001000000080000006092C55BB9725A4052717932D3BF3440D6AE5AB02C715A404277D28D73BD34400AD7A3703D715A40319A95ED43C2344092765CBAED6F5A408F4B1F31AFC73440437573F1B7705A404F93196F2BC93440765EF3424B715A4059309B4798C934407F8978EBFC715A402EAC1BEF8EC434406092C55BB9725A4052717932D3BF3440', 28, 37, 11.451377807963402, '0101000020E6100000C01E737964715A40B0304698D8C33440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (499, 'Ô 67 B B B A A B B', '0103000020E61000000100000006000000D6AE5AB02C715A404277D28D73BD3440D08DD46E606F5A40F28B5C81B2BA3440CD30AEEB096E5A40A196D27221C4344092765CBAED6F5A408F4B1F31AFC734400AD7A3703D715A40319A95ED43C23440D6AE5AB02C715A404277D28D73BD3440', 435, 444, 20.6572249990919, '0101000020E6100000A4BABC66C76F5A40C8F1400942C13440', NULL, '#e29d36', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (500, 'h', '0103000020E610000001000000070000000F643DB5FA685A4096CB46E7FC2835403483F8C08E695A409015FC36C4303540D1E80E6267695A4039EFFFE384353540042159C0046C5A408351499D80363540B3CEF8BEB86C5A40ABCB2901313535403F541A31B36C5A40A1BFD023462B35400F643DB5FA685A4096CB46E7FC283540', 118, 260, 31.936055608963386, '0101000020E610000058417201FD6A5A400F980AB4F12F3540', NULL, '#59e236', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (501, 'uk', '0103000020E61000000100000007000000B3CEF8BEB86C5A40ABCB2901313535407024D060536E5A405AD76839D0373540BAF8DB9E20705A40A20914B188393540C4CE143AAF705A404DA3C9C51830354033FD12F1D66E5A409241EE224C2D35403F541A31B36C5A40A1BFD023462B3540B3CEF8BEB86C5A40ABCB290131353540', 37, 91, 31.71620258874894, '0101000020E61000008975FBD4916E5A4078AE277865323540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (502, 'ghj', '0103000020E61000000100000005000000BAF8DB9E20705A40A20914B188393540742497FF90725A40CE177B2FBE403540BB09BE69FA735A40C05C8B16A0353540C4CE143AAF705A404DA3C9C518303540BAF8DB9E20705A40A20914B188393540', 26, 48, 28.988288681079293, '0101000020E610000005C9DF90EC715A4097255932FB373540', NULL, '#36e27b', 1);
+INSERT INTO public."basic_units" (id, name, geom, customer_count, order_count, area_km2, centroid, created_by, color, version_id) VALUES (503, 'kkk', '0103000020E61000000100000008000000742497FF90725A40CE177B2FBE4035406AC18BBE82755A40492C29779F473540AFB0E07EC0775A40492C29779F4735401FF30181CE785A40624ED026874335406E52D158FB785A4013286211C33A3540F3E7DB82A5755A40F4FE3F4E98383540BB09BE69FA735A40C05C8B16A0353540742497FF90725A40CE177B2FBE403540', 10, 20, 63.172889249611295, '0101000020E6100000882B9D1CEF755A40319A2478723F3540', NULL, '#36e27b', 1);
+
+--
+-- Data for Name: unit_adjacencies; Type: TABLE DATA
+--
+
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (74, 75, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (74, 474, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (75, 359, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (87, 102, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (87, 137, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (87, 435, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (87, 439, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (95, 96, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (95, 124, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (95, 168, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (96, 122, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (96, 157, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (101, 102, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (101, 130, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (101, 158, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (102, 133, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (102, 439, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (121, 122, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (121, 123, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (121, 144, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (121, 159, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (122, 124, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (122, 161, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (123, 124, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (123, 146, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (123, 178, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (124, 172, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (128, 129, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (128, 133, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (128, 140, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (128, 153, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (129, 130, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (129, 156, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (129, 160, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (130, 133, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (130, 162, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (133, 137, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (137, 140, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (137, 435, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (137, 466, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (139, 140, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (139, 149, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (139, 466, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (139, 483, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (140, 152, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (144, 146, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (144, 165, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (144, 188, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (146, 182, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (146, 190, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (149, 152, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (149, 191, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (149, 483, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (152, 153, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (152, 194, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (153, 156, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (153, 195, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (156, 166, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (156, 491, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (157, 158, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (157, 161, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (158, 162, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (159, 160, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (159, 161, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (159, 165, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (160, 162, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (160, 166, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (161, 162, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (165, 166, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (165, 487, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (166, 489, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (167, 168, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (167, 171, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (167, 359, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (167, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (168, 172, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (169, 171, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (169, 175, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (169, 177, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (169, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (171, 172, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (171, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (172, 177, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (172, 178, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (174, 175, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (174, 180, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (175, 181, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (175, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (177, 178, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (177, 181, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (178, 182, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (180, 181, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (180, 200, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (181, 182, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (182, 200, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (187, 188, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (187, 189, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (187, 480, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (188, 190, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (188, 486, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (188, 487, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (189, 190, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (190, 200, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (191, 194, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (191, 427, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (191, 432, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (191, 485, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (194, 195, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (194, 494, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (194, 495, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (195, 196, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (195, 490, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (195, 491, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (196, 425, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (196, 478, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (196, 479, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (196, 492, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (196, 495, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (277, 278, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (277, 305, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (278, 310, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (278, 316, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (282, 290, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (282, 309, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (290, 291, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (290, 293, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (290, 326, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (291, 292, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (292, 293, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (292, 332, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (293, 323, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (293, 333, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (294, 295, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (294, 298, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (294, 317, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (295, 299, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (295, 308, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (296, 297, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (296, 298, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (296, 300, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (296, 319, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (297, 299, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (297, 301, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (297, 324, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (298, 299, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (298, 320, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (299, 325, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (300, 301, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (300, 318, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (300, 328, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (301, 314, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (301, 335, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (305, 310, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (305, 354, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (308, 309, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (308, 325, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (309, 326, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (310, 322, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (310, 330, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (310, 331, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (311, 312, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (311, 336, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (312, 337, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (312, 354, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (313, 314, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (313, 315, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (313, 349, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (314, 318, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (314, 350, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (315, 318, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (315, 339, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (316, 317, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (316, 322, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (317, 320, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (318, 340, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (319, 320, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (319, 321, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (319, 328, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (320, 322, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (321, 322, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (321, 329, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (321, 331, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (323, 324, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (323, 326, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (323, 334, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (324, 325, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (324, 335, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (325, 326, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (328, 329, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (328, 340, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (329, 338, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (329, 342, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (330, 331, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (330, 337, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (330, 354, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (331, 338, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (332, 333, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (332, 343, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (333, 334, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (333, 346, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (334, 335, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (334, 347, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (335, 350, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (336, 337, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (336, 352, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (337, 338, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (338, 352, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (339, 340, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (339, 341, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (340, 342, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (341, 342, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (342, 352, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (343, 344, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (343, 346, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (344, 345, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (345, 346, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (345, 348, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (346, 347, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (347, 348, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (347, 350, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (348, 349, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (349, 350, 5);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (359, 474, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (359, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (372, 375, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (372, 384, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (372, 422, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (375, 377, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (375, 387, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (377, 379, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (377, 497, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (379, 381, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (379, 499, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (381, 383, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (381, 393, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (383, 395, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (384, 387, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (384, 396, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (384, 422, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (384, 424, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (387, 399, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (387, 496, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (387, 497, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (393, 395, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (393, 405, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (393, 498, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (393, 499, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (395, 407, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (396, 399, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (396, 408, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (396, 424, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (396, 425, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (396, 492, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (399, 401, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (399, 411, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (401, 413, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (401, 471, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (401, 496, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (404, 405, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (404, 406, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (404, 414, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (404, 472, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (405, 407, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (405, 470, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (406, 407, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (408, 411, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (408, 416, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (408, 492, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (408, 493, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (411, 413, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (411, 419, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (412, 413, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (412, 414, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (412, 418, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (413, 419, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (413, 473, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (414, 472, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (414, 473, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (416, 419, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (416, 420, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (416, 431, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (418, 419, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (418, 420, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (420, 421, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (420, 431, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (421, 432, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (422, 424, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (422, 481, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (424, 425, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (424, 476, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (424, 478, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (425, 478, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (425, 492, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (427, 431, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (427, 494, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (431, 432, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (431, 493, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (431, 494, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (432, 447, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (434, 445, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (434, 454, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (435, 436, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (435, 439, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (435, 457, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (435, 501, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (436, 455, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (436, 464, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (436, 466, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (437, 452, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (437, 457, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (437, 503, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (439, 500, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (445, 456, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (445, 469, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (447, 454, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (447, 484, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (447, 485, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (452, 455, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (452, 468, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (454, 456, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (455, 457, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (455, 462, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (456, 463, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (456, 484, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (457, 502, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (462, 463, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (462, 464, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (462, 468, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (463, 469, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (463, 482, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (464, 466, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (464, 482, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (464, 483, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (468, 469, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (470, 471, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (470, 472, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (470, 498, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (471, 473, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (471, 498, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (472, 473, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (474, 475, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (476, 477, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (476, 478, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (476, 481, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (477, 479, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (477, 480, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (477, 488, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (478, 479, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (479, 490, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (480, 481, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (480, 486, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (482, 483, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (482, 484, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (483, 485, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (484, 485, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (486, 487, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (486, 488, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (487, 489, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (488, 489, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (488, 490, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (489, 491, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (490, 491, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (492, 493, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (492, 495, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (493, 494, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (494, 495, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (496, 497, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (496, 498, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (497, 499, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (498, 499, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (500, 501, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (501, 502, 1);
+INSERT INTO public."unit_adjacencies" (unit_a_id, unit_b_id, version_id) VALUES (502, 503, 1);
+
+--
+-- Data for Name: optimization_jobs; Type: TABLE DATA
+--
+
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (1, 5, 'error', 0, 115, 'Invalid or unexpected token', '2026-05-04T06:29:43.283Z', '2026-05-04T06:29:43.426Z', '2026-05-04T06:29:43.266Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (2, 5, 'error', 0, 114, 'Các đa giác được chọn rời rạc (không liền kề nhau). Vui lòng chọn một cụm liền mạch!', '2026-05-04T06:37:51.507Z', '2026-05-04T06:37:51.914Z', '2026-05-04T06:37:51.504Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (3, 5, 'error', 0, 136, 'Các đa giác được chọn rời rạc (không liền kề nhau). Vui lòng chọn một cụm liền mạch!', '2026-05-04T06:38:23.187Z', '2026-05-04T06:38:23.552Z', '2026-05-04T06:38:23.184Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (4, 5, 'error', 0, 128, 'Các đa giác được chọn rời rạc (không liền kề nhau). Vui lòng chọn một cụm liền mạch!', '2026-05-04T06:42:33.895Z', '2026-05-04T06:42:34.378Z', '2026-05-04T06:42:33.891Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (5, 5, 'done', 114, 114, '{"iterations":114,"bestRho":0.08188415765835827,"localSearchMoves":0,"message":"Hoàn tất phân chia vùng BGRASP."}', '2026-05-04T06:43:27.514Z', '2026-05-04T06:43:29.759Z', '2026-05-04T06:43:27.502Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (6, 5, 'done', 147, 147, 'Đang cập nhật màu sắc bản đồ...', '2026-05-04T06:48:46.185Z', '2026-05-04T06:48:49.000Z', '2026-05-04T06:48:46.171Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (7, 5, 'done', 143, 143, '{"iterations":143,"bestRho":0.029896685252900783,"localSearchMoves":0,"message":"Hoàn tất phân chia vùng BGRASP."}', '2026-05-04T09:17:15.811Z', '2026-05-04T09:17:18.672Z', '2026-05-04T09:17:15.797Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (8, 5, 'done', 134, 134, '{"iterations":134,"bestRho":0.029896502523030225,"localSearchMoves":0,"message":"Hoàn tất phân chia vùng BGRASP."}', '2026-05-05T16:31:28.785Z', '2026-05-05T16:31:31.275Z', '2026-05-05T16:31:28.742Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (9, 5, 'done', 106, 106, '{"iterations":106,"bestRho":0.029896502523030225,"localSearchMoves":0,"message":"Hoàn tất phân chia vùng BGRASP."}', '2026-05-05T16:31:56.477Z', '2026-05-05T16:31:58.542Z', '2026-05-05T16:31:56.472Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (10, 5, 'done', 105, 105, 'Đang cập nhật màu sắc bản đồ...', '2026-05-05T17:36:25.664Z', '2026-05-05T17:36:28.390Z', '2026-05-05T17:36:25.604Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (11, 5, 'done', 117, 117, '{"iterations":117,"bestRho":0.037362720618459515,"localSearchMoves":0,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:48:50.850Z', '2026-05-05T18:48:53.285Z', '2026-05-05T18:48:50.827Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (12, 5, 'done', 119, 119, '{"iterations":119,"bestRho":0.12184309175530766,"localSearchMoves":6,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:49:07.834Z', '2026-05-05T18:49:10.061Z', '2026-05-05T18:49:07.830Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (13, 5, 'done', 125, 125, '{"iterations":125,"bestRho":0.12637576760606947,"localSearchMoves":6,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:51:53.427Z', '2026-05-05T18:51:55.780Z', '2026-05-05T18:51:53.424Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (14, 5, 'done', 109, 109, '{"iterations":109,"bestRho":0.22137119611488237,"localSearchMoves":11,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:52:13.073Z', '2026-05-05T18:52:15.121Z', '2026-05-05T18:52:13.070Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (15, 5, 'done', 108, 108, '{"iterations":108,"bestRho":0.0709511832313534,"localSearchMoves":3,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:52:45.038Z', '2026-05-05T18:52:47.071Z', '2026-05-05T18:52:45.033Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (16, 5, 'done', 110, 110, 'Đang cập nhật màu sắc bản đồ...', '2026-05-05T18:52:58.241Z', '2026-05-05T18:53:00.444Z', '2026-05-05T18:52:58.239Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (17, 5, 'done', 109, 109, '{"iterations":109,"bestRho":0.12184309175530766,"localSearchMoves":6,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:53:27.401Z', '2026-05-05T18:53:29.490Z', '2026-05-05T18:53:27.397Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (18, 5, 'done', 146, 146, 'Đang cập nhật màu sắc bản đồ...', '2026-05-05T18:56:07.639Z', '2026-05-05T18:56:10.372Z', '2026-05-05T18:56:07.634Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (19, 5, 'done', 122, 122, '{"iterations":122,"bestRho":0.03913463358466017,"localSearchMoves":0,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-05T18:56:28.605Z', '2026-05-05T18:56:30.853Z', '2026-05-05T18:56:28.601Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (20, 5, 'done', 142, 142, '{"iterations":142,"bestRho":0.1122301220930596,"localSearchMoves":3,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T08:39:56.573Z', '2026-05-06T08:39:59.665Z', '2026-05-06T08:39:56.488Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (21, 5, 'done', 132, 132, '{"iterations":132,"bestRho":0.13468811800636044,"localSearchMoves":9,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T08:48:54.471Z', '2026-05-06T08:48:57.463Z', '2026-05-06T08:48:54.372Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (22, 1, 'done', 132, 132, '{"iterations":132,"bestRho":0.07291815957548209,"localSearchMoves":7,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T15:29:20.287Z', '2026-05-06T15:29:23.173Z', '2026-05-06T15:29:20.246Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (23, 1, 'done', 102, 102, '{"iterations":102,"bestRho":0.07291815957548209,"localSearchMoves":5,"contiguityVerified":false,"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T15:34:37.435Z', '2026-05-06T15:34:39.558Z', '2026-05-06T15:34:37.428Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (24, 1, 'done', 140, 140, 'Đang cập nhật màu sắc bản đồ...', '2026-05-06T15:39:42.006Z', '2026-05-06T15:39:44.417Z', '2026-05-06T15:39:42.002Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (25, 1, 'done', 136, 136, '{"iterations":136,"bestRho":0.06364940438556224,"localSearchMoves":4,"contiguityVerified":false,"summary":[{"color":"#61e8ee","polygonCount":12,"customerCount":2963,"orderCount":7124},{"color":"#f08fd6","polygonCount":5,"customerCount":2889,"orderCount":6833},{"color":"#71f98f","polygonCount":12,"customerCount":3088,"orderCount":7128},{"color":"#50dfd3","polygonCount":9,"customerCount":2844,"orderCount":6589},{"color":"#713aba","polygonCount":13,"customerCount":3027,"orderCount":6853},{"color":"#172e28","polygonCount":11,"customerCount":3049,"orderCount":7515},{"color":"#a5f732","polygonCount":10,"customerCount":3090,"orderCount":6967},{"color":"#ce3ecc","polygonCount":11,"customerCount":3034,"orderCount":6906},{"color":"#d56724","polygonCount":14,"customerCount":3028,"orderCount":7129},{"color":"#240ea6","polygonCount":10,"customerCount":2988,"orderCount":6956}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T16:14:54.496Z', '2026-05-06T16:14:57.130Z', '2026-05-06T16:14:54.480Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (26, 1, 'done', 116, 116, 'Vòng lặp 116/116 (Rho tốt nhất: 0.1201)', '2026-05-06T16:42:10.144Z', '2026-05-06T16:42:12.884Z', '2026-05-06T16:42:10.115Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (27, 5, 'done', 106, 106, 'Đang cập nhật màu sắc bản đồ...', '2026-05-06T16:43:01.269Z', '2026-05-06T16:43:03.369Z', '2026-05-06T16:43:01.266Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (28, 5, 'error', 101, 101, 'hslToHex is not defined', '2026-05-06T16:51:57.893Z', '2026-05-06T16:52:00.231Z', '2026-05-06T16:51:57.879Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (29, 5, 'error', 121, 121, 'hslToHex is not defined', '2026-05-06T16:52:19.242Z', '2026-05-06T16:52:21.610Z', '2026-05-06T16:52:19.238Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (30, 5, 'error', 128, 128, 'hslToHex is not defined', '2026-05-06T16:52:57.032Z', '2026-05-06T16:52:59.463Z', '2026-05-06T16:52:57.029Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (31, 5, 'done', 111, 111, 'Đang cập nhật màu sắc bản đồ...', '2026-05-06T16:54:25.686Z', '2026-05-06T16:54:27.916Z', '2026-05-06T16:54:25.682Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (32, 5, 'done', 121, 121, '{"iterations":121,"bestRho":0.22108749041696052,"localSearchMoves":9,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":8,"customerCount":1186,"orderCount":3815},{"color":"#e29d36","polygonCount":7,"customerCount":1187,"orderCount":6128},{"color":"#c0e236","polygonCount":4,"customerCount":1176,"orderCount":2448},{"color":"#59e236","polygonCount":5,"customerCount":1195,"orderCount":5878},{"color":"#36e27b","polygonCount":7,"customerCount":993,"orderCount":1560},{"color":"#36e2e2","polygonCount":5,"customerCount":1234,"orderCount":2330},{"color":"#367be2","polygonCount":5,"customerCount":1223,"orderCount":2407},{"color":"#5936e2","polygonCount":6,"customerCount":1398,"orderCount":4346},{"color":"#c036e2","polygonCount":5,"customerCount":1179,"orderCount":3288},{"color":"#e2369d","polygonCount":8,"customerCount":1229,"orderCount":2800}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T16:58:38.471Z', '2026-05-06T16:58:40.963Z', '2026-05-06T16:58:38.453Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (33, 5, 'done', 123, 123, '{"iterations":123,"bestRho":0.2089922614687896,"localSearchMoves":11,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":7,"customerCount":1148,"orderCount":1840},{"color":"#e29d36","polygonCount":7,"customerCount":1079,"orderCount":6014},{"color":"#c0e236","polygonCount":4,"customerCount":1176,"orderCount":2448},{"color":"#59e236","polygonCount":5,"customerCount":1195,"orderCount":4643},{"color":"#36e27b","polygonCount":8,"customerCount":1215,"orderCount":3955},{"color":"#36e2e2","polygonCount":5,"customerCount":1296,"orderCount":2988},{"color":"#367be2","polygonCount":5,"customerCount":1223,"orderCount":3524},{"color":"#5936e2","polygonCount":7,"customerCount":1272,"orderCount":3675},{"color":"#c036e2","polygonCount":5,"customerCount":1179,"orderCount":3124},{"color":"#e2369d","polygonCount":7,"customerCount":1217,"orderCount":2789}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:14:33.506Z', '2026-05-06T17:14:36.414Z', '2026-05-06T17:14:33.465Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (34, 1, 'done', 135, 135, '{"iterations":135,"bestRho":0.15574321722821566,"localSearchMoves":61,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":8,"customerCount":1793,"orderCount":3381},{"color":"#e29d36","polygonCount":6,"customerCount":1781,"orderCount":3532},{"color":"#c0e236","polygonCount":8,"customerCount":1807,"orderCount":3209},{"color":"#59e236","polygonCount":12,"customerCount":1800,"orderCount":4614},{"color":"#36e27b","polygonCount":17,"customerCount":1796,"orderCount":4938},{"color":"#36e2e2","polygonCount":15,"customerCount":1787,"orderCount":3247},{"color":"#367be2","polygonCount":11,"customerCount":1810,"orderCount":3729},{"color":"#5936e2","polygonCount":8,"customerCount":1776,"orderCount":5028},{"color":"#c036e2","polygonCount":13,"customerCount":1797,"orderCount":5364},{"color":"#e2369d","polygonCount":9,"customerCount":1853,"orderCount":2958}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:17:35.605Z', '2026-05-06T17:17:38.445Z', '2026-05-06T17:17:35.594Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (35, 1, 'done', 143, 143, '{"iterations":143,"bestRho":0.2086231866543974,"localSearchMoves":38,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":9,"customerCount":1280,"orderCount":2647},{"color":"#e27b36","polygonCount":4,"customerCount":773,"orderCount":1520},{"color":"#e2c036","polygonCount":2,"customerCount":1199,"orderCount":2335},{"color":"#c0e236","polygonCount":7,"customerCount":1235,"orderCount":3220},{"color":"#7be236","polygonCount":7,"customerCount":1213,"orderCount":2859},{"color":"#36e236","polygonCount":9,"customerCount":1315,"orderCount":2910},{"color":"#36e27b","polygonCount":13,"customerCount":1323,"orderCount":3747},{"color":"#36e2c0","polygonCount":9,"customerCount":1163,"orderCount":2141},{"color":"#36c0e2","polygonCount":6,"customerCount":1268,"orderCount":3397},{"color":"#367be2","polygonCount":6,"customerCount":1245,"orderCount":2187},{"color":"#3636e2","polygonCount":7,"customerCount":1219,"orderCount":1903},{"color":"#7b36e2","polygonCount":7,"customerCount":1180,"orderCount":2444},{"color":"#c036e2","polygonCount":9,"customerCount":1203,"orderCount":1907},{"color":"#e236c0","polygonCount":5,"customerCount":1170,"orderCount":3963},{"color":"#e2367b","polygonCount":6,"customerCount":1214,"orderCount":2818}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:19:26.470Z', '2026-05-06T17:19:29.421Z', '2026-05-06T17:19:26.466Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (36, 1, 'done', 109, 109, '{"iterations":109,"bestRho":0.2086231866543974,"localSearchMoves":38,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":9,"customerCount":1280,"orderCount":2647},{"color":"#e27b36","polygonCount":4,"customerCount":773,"orderCount":1520},{"color":"#e2c036","polygonCount":2,"customerCount":1199,"orderCount":2335},{"color":"#c0e236","polygonCount":7,"customerCount":1235,"orderCount":3220},{"color":"#7be236","polygonCount":7,"customerCount":1213,"orderCount":2859},{"color":"#36e236","polygonCount":9,"customerCount":1315,"orderCount":2910},{"color":"#36e27b","polygonCount":13,"customerCount":1323,"orderCount":3747},{"color":"#36e2c0","polygonCount":9,"customerCount":1163,"orderCount":2141},{"color":"#36c0e2","polygonCount":6,"customerCount":1268,"orderCount":3397},{"color":"#367be2","polygonCount":6,"customerCount":1245,"orderCount":2187},{"color":"#3636e2","polygonCount":7,"customerCount":1219,"orderCount":1903},{"color":"#7b36e2","polygonCount":7,"customerCount":1180,"orderCount":2444},{"color":"#c036e2","polygonCount":9,"customerCount":1203,"orderCount":1907},{"color":"#e236c0","polygonCount":5,"customerCount":1170,"orderCount":3963},{"color":"#e2367b","polygonCount":6,"customerCount":1214,"orderCount":2818}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:20:40.305Z', '2026-05-06T17:20:42.764Z', '2026-05-06T17:20:40.291Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (37, 1, 'done', 104, 104, '{"iterations":104,"bestRho":0.1435010246098611,"localSearchMoves":58,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":1845,"orderCount":2986},{"color":"#e29d36","polygonCount":6,"customerCount":1781,"orderCount":3532},{"color":"#c0e236","polygonCount":6,"customerCount":1848,"orderCount":4360},{"color":"#59e236","polygonCount":12,"customerCount":1830,"orderCount":4109},{"color":"#36e27b","polygonCount":12,"customerCount":1686,"orderCount":3912},{"color":"#36e2e2","polygonCount":14,"customerCount":1817,"orderCount":4944},{"color":"#367be2","polygonCount":13,"customerCount":1646,"orderCount":3265},{"color":"#5936e2","polygonCount":11,"customerCount":1937,"orderCount":2664},{"color":"#c036e2","polygonCount":8,"customerCount":1816,"orderCount":6024},{"color":"#e2369d","polygonCount":12,"customerCount":1794,"orderCount":4202}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:25:06.298Z', '2026-05-06T17:25:08.596Z', '2026-05-06T17:25:06.290Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (38, 1, 'done', 110, 110, '{"iterations":110,"bestRho":0.1435010246098611,"localSearchMoves":58,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":1845,"orderCount":2986},{"color":"#e29d36","polygonCount":6,"customerCount":1781,"orderCount":3532},{"color":"#c0e236","polygonCount":6,"customerCount":1848,"orderCount":4360},{"color":"#59e236","polygonCount":12,"customerCount":1830,"orderCount":4109},{"color":"#36e27b","polygonCount":12,"customerCount":1686,"orderCount":3912},{"color":"#36e2e2","polygonCount":14,"customerCount":1817,"orderCount":4944},{"color":"#367be2","polygonCount":13,"customerCount":1646,"orderCount":3265},{"color":"#5936e2","polygonCount":11,"customerCount":1937,"orderCount":2664},{"color":"#c036e2","polygonCount":8,"customerCount":1816,"orderCount":6024},{"color":"#e2369d","polygonCount":12,"customerCount":1794,"orderCount":4202}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-06T17:26:04.363Z', '2026-05-06T17:26:06.780Z', '2026-05-06T17:26:04.358Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (39, 5, 'done', 111, 127, 'Vòng lặp 111/127 (Rho tốt nhất: 0.2076)', '2026-05-07T07:26:54.276Z', '2026-05-07T07:27:04.478Z', '2026-05-07T07:26:54.162Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (40, 5, 'done', 131, 131, '{"iterations":131,"bestRho":0.09421136187904691,"localSearchMoves":13,"contiguityVerified":false,"summary":[{"color":"#e23636","polygonCount":11,"customerCount":2336,"orderCount":6591},{"color":"#c0e236","polygonCount":12,"customerCount":2432,"orderCount":7729},{"color":"#36e27b","polygonCount":10,"customerCount":2406,"orderCount":6718},{"color":"#367be2","polygonCount":12,"customerCount":2441,"orderCount":9083},{"color":"#c036e2","polygonCount":15,"customerCount":2385,"orderCount":4879}],"message":"Hoàn tất phân chia vùng BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông."}', '2026-05-07T07:32:29.664Z', '2026-05-07T07:32:43.687Z', '2026-05-07T07:32:29.644Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (41, 5, 'done', 101, 101, '{"iterations":101,"bestRho":0.07553552105470802,"localSearchMoves":500,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":2538,"orderCount":5509},{"color":"#c0e236","polygonCount":13,"customerCount":2371,"orderCount":3560},{"color":"#36e27b","polygonCount":11,"customerCount":1718,"orderCount":7004},{"color":"#367be2","polygonCount":11,"customerCount":2860,"orderCount":6143},{"color":"#c036e2","polygonCount":13,"customerCount":2513,"orderCount":12784}],"message":"Hoàn tất phân chia vùng BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T08:08:54.194Z', '2026-05-07T08:09:03.298Z', '2026-05-07T08:08:54.170Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (42, 5, 'done', 111, 111, '{"iterations":111,"filteredSolutions":50,"bestRho":0.03497160047416101,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":2416,"orderCount":7353},{"color":"#c0e236","polygonCount":12,"customerCount":2429,"orderCount":9935},{"color":"#36e27b","polygonCount":13,"customerCount":2371,"orderCount":3560},{"color":"#367be2","polygonCount":12,"customerCount":2360,"orderCount":7961},{"color":"#c036e2","polygonCount":11,"customerCount":2424,"orderCount":6191}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T08:39:59.344Z', '2026-05-07T08:40:28.289Z', '2026-05-07T08:39:59.317Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (43, 5, 'done', 106, 106, '{"iterations":106,"filteredSolutions":50,"bestRho":0.08985756949547347,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":6,"customerCount":1299,"orderCount":4250},{"color":"#e29d36","polygonCount":7,"customerCount":1187,"orderCount":6128},{"color":"#c0e236","polygonCount":9,"customerCount":1233,"orderCount":1989},{"color":"#59e236","polygonCount":3,"customerCount":1056,"orderCount":2013},{"color":"#36e27b","polygonCount":5,"customerCount":1195,"orderCount":5319},{"color":"#36e2e2","polygonCount":5,"customerCount":1256,"orderCount":4759},{"color":"#367be2","polygonCount":7,"customerCount":1109,"orderCount":2555},{"color":"#5936e2","polygonCount":6,"customerCount":1170,"orderCount":2395},{"color":"#c036e2","polygonCount":5,"customerCount":1223,"orderCount":3524},{"color":"#e2369d","polygonCount":7,"customerCount":1272,"orderCount":2068}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T08:40:52.524Z', '2026-05-07T08:41:24.831Z', '2026-05-07T08:40:52.517Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (44, 1, 'done', 104, 104, '{"iterations":104,"filteredSolutions":50,"bestRho":0.042696320485618944,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":1756,"orderCount":4506},{"color":"#e29d36","polygonCount":14,"customerCount":1817,"orderCount":4552},{"color":"#c0e236","polygonCount":9,"customerCount":1828,"orderCount":3109},{"color":"#59e236","polygonCount":9,"customerCount":1931,"orderCount":4405},{"color":"#36e27b","polygonCount":7,"customerCount":1802,"orderCount":3584},{"color":"#36e2e2","polygonCount":13,"customerCount":1712,"orderCount":3495},{"color":"#367be2","polygonCount":9,"customerCount":1779,"orderCount":4214},{"color":"#5936e2","polygonCount":8,"customerCount":1746,"orderCount":3281},{"color":"#c036e2","polygonCount":11,"customerCount":1844,"orderCount":5687},{"color":"#e2369d","polygonCount":14,"customerCount":1785,"orderCount":3165}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T08:48:58.223Z', '2026-05-07T08:49:12.164Z', '2026-05-07T08:48:58.212Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (45, 1, 'done', 131, 131, '{"iterations":131,"filteredSolutions":50,"bestRho":0.013361480705472254,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":23,"customerCount":3603,"orderCount":7463},{"color":"#c0e236","polygonCount":18,"customerCount":3619,"orderCount":8569},{"color":"#36e27b","polygonCount":22,"customerCount":3588,"orderCount":8011},{"color":"#367be2","polygonCount":18,"customerCount":3587,"orderCount":9782},{"color":"#c036e2","polygonCount":25,"customerCount":3603,"orderCount":6173}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T09:20:02.034Z', '2026-05-07T09:23:21.770Z', '2026-05-07T09:19:58.538Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (46, 5, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.03608943848936756,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":2425,"orderCount":10256},{"color":"#c0e236","polygonCount":15,"customerCount":2385,"orderCount":6839},{"color":"#36e27b","polygonCount":11,"customerCount":2393,"orderCount":4367},{"color":"#367be2","polygonCount":9,"customerCount":2363,"orderCount":5119},{"color":"#c036e2","polygonCount":11,"customerCount":2434,"orderCount":8419}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T09:24:38.297Z', '2026-05-07T09:25:05.385Z', '2026-05-07T09:24:38.292Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (47, 5, 'done', 137, 137, '{"iterations":137,"filteredSolutions":50,"bestRho":0.2732725284934702,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":2385,"orderCount":7137},{"color":"#c0e236","polygonCount":15,"customerCount":2425,"orderCount":6389},{"color":"#36e27b","polygonCount":13,"customerCount":2339,"orderCount":9369},{"color":"#367be2","polygonCount":9,"customerCount":2400,"orderCount":7216},{"color":"#c036e2","polygonCount":11,"customerCount":2451,"orderCount":4889}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T09:43:37.571Z', '2026-05-07T09:44:10.578Z', '2026-05-07T09:43:37.565Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (48, 5, 'done', 112, 112, '{"iterations":112,"filteredSolutions":50,"bestRho":0.24455822489994175,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":7,"customerCount":1217,"orderCount":1794},{"color":"#e29d36","polygonCount":5,"customerCount":1223,"orderCount":2407},{"color":"#c0e236","polygonCount":5,"customerCount":1179,"orderCount":3222},{"color":"#59e236","polygonCount":5,"customerCount":1190,"orderCount":3121},{"color":"#36e27b","polygonCount":6,"customerCount":1259,"orderCount":4732},{"color":"#36e2e2","polygonCount":5,"customerCount":1195,"orderCount":5878},{"color":"#367be2","polygonCount":7,"customerCount":1274,"orderCount":3252},{"color":"#5936e2","polygonCount":8,"customerCount":1211,"orderCount":2424},{"color":"#c036e2","polygonCount":5,"customerCount":1173,"orderCount":2156},{"color":"#e2369d","polygonCount":7,"customerCount":1079,"orderCount":6014}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T09:50:21.164Z', '2026-05-07T09:50:33.292Z', '2026-05-07T09:50:21.156Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (49, 1, 'done', 122, 122, '{"iterations":122,"filteredSolutions":50,"bestRho":0.21465175212069515,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":9,"customerCount":1197,"orderCount":3121},{"color":"#e27b36","polygonCount":7,"customerCount":1113,"orderCount":3656},{"color":"#e2c036","polygonCount":6,"customerCount":1635,"orderCount":3736},{"color":"#c0e236","polygonCount":9,"customerCount":1375,"orderCount":3715},{"color":"#7be236","polygonCount":8,"customerCount":1255,"orderCount":4757},{"color":"#36e236","polygonCount":14,"customerCount":1331,"orderCount":4420},{"color":"#36e27b","polygonCount":3,"customerCount":1415,"orderCount":3497},{"color":"#36e2c0","polygonCount":14,"customerCount":1286,"orderCount":4011},{"color":"#36c0e2","polygonCount":10,"customerCount":1320,"orderCount":4428},{"color":"#367be2","polygonCount":7,"customerCount":1339,"orderCount":5044},{"color":"#3636e2","polygonCount":5,"customerCount":1317,"orderCount":3698},{"color":"#7b36e2","polygonCount":11,"customerCount":1347,"orderCount":4085},{"color":"#c036e2","polygonCount":3,"customerCount":1343,"orderCount":3438},{"color":"#e236c0","polygonCount":7,"customerCount":1343,"orderCount":3903},{"color":"#e2367b","polygonCount":9,"customerCount":1354,"orderCount":4418}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T14:56:56.274Z', '2026-05-07T14:57:29.378Z', '2026-05-07T14:56:56.243Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (50, 1, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.20738371794021643,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":5,"customerCount":1036,"orderCount":3168},{"color":"#e27b36","polygonCount":10,"customerCount":1024,"orderCount":2160},{"color":"#e2c036","polygonCount":16,"customerCount":899,"orderCount":2387},{"color":"#c0e236","polygonCount":18,"customerCount":996,"orderCount":3083},{"color":"#7be236","polygonCount":16,"customerCount":978,"orderCount":2308},{"color":"#36e236","polygonCount":6,"customerCount":1011,"orderCount":2288},{"color":"#36e27b","polygonCount":9,"customerCount":998,"orderCount":2822},{"color":"#36e2c0","polygonCount":9,"customerCount":930,"orderCount":2306},{"color":"#36c0e2","polygonCount":9,"customerCount":1053,"orderCount":2038},{"color":"#367be2","polygonCount":6,"customerCount":879,"orderCount":2165},{"color":"#3636e2","polygonCount":4,"customerCount":990,"orderCount":2794},{"color":"#7b36e2","polygonCount":8,"customerCount":998,"orderCount":2870},{"color":"#c036e2","polygonCount":14,"customerCount":949,"orderCount":2229},{"color":"#e236c0","polygonCount":5,"customerCount":1170,"orderCount":3559},{"color":"#e2367b","polygonCount":6,"customerCount":1089,"orderCount":3823}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T15:00:27.405Z', '2026-05-07T15:01:49.025Z', '2026-05-07T15:00:27.400Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (51, 1, 'done', 131, 131, '{"iterations":131,"filteredSolutions":50,"bestRho":0.3510141638300343,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1158,"orderCount":2604},{"color":"#e26a36","polygonCount":2,"customerCount":31,"orderCount":80},{"color":"#e29d36","polygonCount":6,"customerCount":879,"orderCount":2165},{"color":"#e2d136","polygonCount":8,"customerCount":401,"orderCount":1088},{"color":"#c0e236","polygonCount":9,"customerCount":1103,"orderCount":3144},{"color":"#8ce236","polygonCount":4,"customerCount":652,"orderCount":1632},{"color":"#59e236","polygonCount":10,"customerCount":840,"orderCount":2007},{"color":"#36e247","polygonCount":5,"customerCount":828,"orderCount":1780},{"color":"#36e27b","polygonCount":9,"customerCount":867,"orderCount":1555},{"color":"#36e2af","polygonCount":6,"customerCount":325,"orderCount":598},{"color":"#36e2e2","polygonCount":11,"customerCount":645,"orderCount":1612},{"color":"#36afe2","polygonCount":7,"customerCount":342,"orderCount":799},{"color":"#367be2","polygonCount":6,"customerCount":1184,"orderCount":3876},{"color":"#3647e2","polygonCount":2,"customerCount":10,"orderCount":25},{"color":"#5936e2","polygonCount":6,"customerCount":1044,"orderCount":3177},{"color":"#8c36e2","polygonCount":15,"customerCount":1200,"orderCount":3563},{"color":"#c036e2","polygonCount":2,"customerCount":421,"orderCount":775},{"color":"#e236d1","polygonCount":8,"customerCount":580,"orderCount":1437},{"color":"#e2369d","polygonCount":7,"customerCount":996,"orderCount":3619},{"color":"#e2366a","polygonCount":8,"customerCount":1494,"orderCount":4464}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T16:24:42.853Z', '2026-05-07T16:25:17.302Z', '2026-05-07T16:24:42.821Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (52, 1, 'done', 142, 142, '{"iterations":142,"filteredSolutions":50,"bestRho":0.193855995424956,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":13,"customerCount":999,"orderCount":2712},{"color":"#e27b36","polygonCount":1,"customerCount":1062,"orderCount":3166},{"color":"#e2c036","polygonCount":6,"customerCount":995,"orderCount":3021},{"color":"#c0e236","polygonCount":7,"customerCount":1007,"orderCount":1964},{"color":"#7be236","polygonCount":8,"customerCount":1009,"orderCount":2670},{"color":"#36e236","polygonCount":10,"customerCount":1023,"orderCount":2327},{"color":"#36e27b","polygonCount":15,"customerCount":950,"orderCount":2154},{"color":"#36e2c0","polygonCount":12,"customerCount":991,"orderCount":2926},{"color":"#36c0e2","polygonCount":6,"customerCount":1119,"orderCount":3780},{"color":"#367be2","polygonCount":12,"customerCount":906,"orderCount":2436},{"color":"#3636e2","polygonCount":15,"customerCount":994,"orderCount":2175},{"color":"#7b36e2","polygonCount":12,"customerCount":996,"orderCount":2635},{"color":"#c036e2","polygonCount":8,"customerCount":1038,"orderCount":2503},{"color":"#e236c0","polygonCount":8,"customerCount":905,"orderCount":2039},{"color":"#e2367b","polygonCount":8,"customerCount":1006,"orderCount":3492}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T17:24:46.281Z', '2026-05-07T17:26:01.673Z', '2026-05-07T17:24:46.272Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (53, 1, 'done', 107, 107, '{"iterations":107,"filteredSolutions":50,"bestRho":0.20270964349397314,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":8,"customerCount":1089,"orderCount":3628},{"color":"#e27b36","polygonCount":3,"customerCount":1072,"orderCount":3191},{"color":"#e2c036","polygonCount":4,"customerCount":1130,"orderCount":3192},{"color":"#c0e236","polygonCount":11,"customerCount":994,"orderCount":2627},{"color":"#7be236","polygonCount":11,"customerCount":982,"orderCount":2573},{"color":"#36e236","polygonCount":12,"customerCount":944,"orderCount":2192},{"color":"#36e27b","polygonCount":10,"customerCount":1000,"orderCount":2289},{"color":"#36e2c0","polygonCount":13,"customerCount":885,"orderCount":2319},{"color":"#36c0e2","polygonCount":18,"customerCount":957,"orderCount":2885},{"color":"#367be2","polygonCount":5,"customerCount":1002,"orderCount":2863},{"color":"#3636e2","polygonCount":15,"customerCount":1000,"orderCount":2440},{"color":"#7b36e2","polygonCount":10,"customerCount":1015,"orderCount":1752},{"color":"#c036e2","polygonCount":4,"customerCount":1057,"orderCount":3553},{"color":"#e236c0","polygonCount":6,"customerCount":879,"orderCount":2165},{"color":"#e2367b","polygonCount":11,"customerCount":994,"orderCount":2331}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T17:38:13.941Z', '2026-05-07T17:39:14.755Z', '2026-05-07T17:38:13.920Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (54, 1, 'done', 123, 123, '{"iterations":123,"filteredSolutions":50,"bestRho":0.19161394058277173,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":932,"orderCount":2773},{"color":"#e27b36","polygonCount":5,"customerCount":1089,"orderCount":3217},{"color":"#e2c036","polygonCount":8,"customerCount":971,"orderCount":3085},{"color":"#c0e236","polygonCount":5,"customerCount":987,"orderCount":3012},{"color":"#7be236","polygonCount":6,"customerCount":984,"orderCount":2898},{"color":"#36e236","polygonCount":14,"customerCount":978,"orderCount":2344},{"color":"#36e27b","polygonCount":10,"customerCount":1015,"orderCount":1911},{"color":"#36e2c0","polygonCount":8,"customerCount":1014,"orderCount":2477},{"color":"#36c0e2","polygonCount":9,"customerCount":912,"orderCount":2334},{"color":"#367be2","polygonCount":8,"customerCount":989,"orderCount":3427},{"color":"#3636e2","polygonCount":5,"customerCount":1026,"orderCount":2314},{"color":"#7b36e2","polygonCount":12,"customerCount":1033,"orderCount":2223},{"color":"#c036e2","polygonCount":8,"customerCount":1091,"orderCount":2727},{"color":"#e236c0","polygonCount":17,"customerCount":993,"orderCount":2500},{"color":"#e2367b","polygonCount":12,"customerCount":986,"orderCount":2758}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T17:48:04.964Z', '2026-05-07T17:49:11.355Z', '2026-05-07T17:48:04.957Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (55, 1, 'done', 125, 125, '{"iterations":125,"filteredSolutions":50,"bestRho":0.18933112981550976,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":9,"customerCount":1022,"orderCount":2799},{"color":"#e27b36","polygonCount":6,"customerCount":1011,"orderCount":2288},{"color":"#e2c036","polygonCount":8,"customerCount":1009,"orderCount":2670},{"color":"#c0e236","polygonCount":14,"customerCount":1000,"orderCount":2003},{"color":"#7be236","polygonCount":19,"customerCount":992,"orderCount":2321},{"color":"#36e236","polygonCount":10,"customerCount":1029,"orderCount":2103},{"color":"#36e27b","polygonCount":5,"customerCount":1029,"orderCount":3228},{"color":"#36e2c0","polygonCount":13,"customerCount":1005,"orderCount":3055},{"color":"#36c0e2","polygonCount":8,"customerCount":991,"orderCount":2544},{"color":"#367be2","polygonCount":12,"customerCount":1009,"orderCount":2462},{"color":"#3636e2","polygonCount":9,"customerCount":944,"orderCount":2116},{"color":"#7b36e2","polygonCount":3,"customerCount":1072,"orderCount":3191},{"color":"#c036e2","polygonCount":17,"customerCount":977,"orderCount":3076},{"color":"#e236c0","polygonCount":5,"customerCount":987,"orderCount":3012},{"color":"#e2367b","polygonCount":3,"customerCount":923,"orderCount":3132}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:02:22.668Z', '2026-05-07T18:03:31.764Z', '2026-05-07T18:02:22.643Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (56, 1, 'done', 104, 104, '{"iterations":104,"filteredSolutions":50,"bestRho":0.18411586228338836,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":11,"customerCount":993,"orderCount":2127},{"color":"#e27b36","polygonCount":10,"customerCount":992,"orderCount":2233},{"color":"#e2c036","polygonCount":3,"customerCount":1072,"orderCount":3191},{"color":"#c0e236","polygonCount":8,"customerCount":1007,"orderCount":2600},{"color":"#7be236","polygonCount":9,"customerCount":1031,"orderCount":2689},{"color":"#36e236","polygonCount":13,"customerCount":1005,"orderCount":2764},{"color":"#36e27b","polygonCount":11,"customerCount":983,"orderCount":2385},{"color":"#36e2c0","polygonCount":14,"customerCount":954,"orderCount":2336},{"color":"#36c0e2","polygonCount":11,"customerCount":933,"orderCount":3389},{"color":"#367be2","polygonCount":4,"customerCount":986,"orderCount":3009},{"color":"#3636e2","polygonCount":13,"customerCount":1025,"orderCount":2641},{"color":"#7b36e2","polygonCount":8,"customerCount":1091,"orderCount":2727},{"color":"#c036e2","polygonCount":10,"customerCount":948,"orderCount":2365},{"color":"#e236c0","polygonCount":4,"customerCount":983,"orderCount":3351},{"color":"#e2367b","polygonCount":12,"customerCount":997,"orderCount":2193}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:06:52.119Z', '2026-05-07T18:07:50.777Z', '2026-05-07T18:06:52.105Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (57, 1, 'done', 126, 126, '{"iterations":126,"filteredSolutions":50,"bestRho":0.2025742628520182,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":1004,"orderCount":2718},{"color":"#e27b36","polygonCount":8,"customerCount":1009,"orderCount":2670},{"color":"#e2c036","polygonCount":7,"customerCount":931,"orderCount":2325},{"color":"#c0e236","polygonCount":6,"customerCount":1017,"orderCount":3089},{"color":"#7be236","polygonCount":10,"customerCount":1093,"orderCount":2241},{"color":"#36e236","polygonCount":10,"customerCount":999,"orderCount":3629},{"color":"#36e27b","polygonCount":11,"customerCount":897,"orderCount":2172},{"color":"#36e2c0","polygonCount":6,"customerCount":990,"orderCount":3380},{"color":"#36c0e2","polygonCount":5,"customerCount":1089,"orderCount":3217},{"color":"#367be2","polygonCount":11,"customerCount":1149,"orderCount":3204},{"color":"#3636e2","polygonCount":9,"customerCount":1028,"orderCount":2022},{"color":"#7b36e2","polygonCount":16,"customerCount":985,"orderCount":2480},{"color":"#c036e2","polygonCount":7,"customerCount":1032,"orderCount":2968},{"color":"#e236c0","polygonCount":12,"customerCount":920,"orderCount":2030},{"color":"#e2367b","polygonCount":8,"customerCount":857,"orderCount":1855}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:10:38.597Z', '2026-05-07T18:11:44.191Z', '2026-05-07T18:10:38.593Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (58, 1, 'done', 136, 136, '{"iterations":136,"filteredSolutions":50,"bestRho":0.19997042159950082,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":13,"customerCount":1466,"orderCount":3263},{"color":"#e29d36","polygonCount":22,"customerCount":1498,"orderCount":3508},{"color":"#c0e236","polygonCount":17,"customerCount":1471,"orderCount":3932},{"color":"#59e236","polygonCount":10,"customerCount":1498,"orderCount":4435},{"color":"#36e27b","polygonCount":2,"customerCount":1711,"orderCount":4644},{"color":"#36e2e2","polygonCount":11,"customerCount":1479,"orderCount":4120},{"color":"#367be2","polygonCount":13,"customerCount":1426,"orderCount":3304},{"color":"#5936e2","polygonCount":26,"customerCount":1479,"orderCount":4218},{"color":"#c036e2","polygonCount":17,"customerCount":1481,"orderCount":4085},{"color":"#e2369d","polygonCount":10,"customerCount":1491,"orderCount":4491}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:12:29.313Z', '2026-05-07T18:15:27.825Z', '2026-05-07T18:12:29.309Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (59, 1, 'done', 147, 147, '{"iterations":147,"filteredSolutions":50,"bestRho":0.21425074063663546,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":1464,"orderCount":4156},{"color":"#e29d36","polygonCount":2,"customerCount":1711,"orderCount":4644},{"color":"#c0e236","polygonCount":12,"customerCount":1410,"orderCount":4310},{"color":"#59e236","polygonCount":15,"customerCount":1473,"orderCount":4308},{"color":"#36e27b","polygonCount":20,"customerCount":1445,"orderCount":3401},{"color":"#36e2e2","polygonCount":10,"customerCount":1491,"orderCount":4491},{"color":"#367be2","polygonCount":17,"customerCount":1496,"orderCount":3233},{"color":"#5936e2","polygonCount":18,"customerCount":1492,"orderCount":4196},{"color":"#c036e2","polygonCount":23,"customerCount":1498,"orderCount":2945},{"color":"#e2369d","polygonCount":10,"customerCount":1520,"orderCount":4316}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:17:21.937Z', '2026-05-07T18:18:25.949Z', '2026-05-07T18:17:21.927Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (60, 1, 'done', 124, 124, '{"iterations":124,"filteredSolutions":50,"bestRho":0.19748590162223767,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":17,"customerCount":1489,"orderCount":2983},{"color":"#e29d36","polygonCount":16,"customerCount":1526,"orderCount":4319},{"color":"#c0e236","polygonCount":13,"customerCount":1500,"orderCount":4333},{"color":"#59e236","polygonCount":8,"customerCount":1547,"orderCount":3984},{"color":"#36e27b","polygonCount":19,"customerCount":1484,"orderCount":4394},{"color":"#36e2e2","polygonCount":9,"customerCount":1523,"orderCount":2719},{"color":"#367be2","polygonCount":9,"customerCount":1468,"orderCount":4237},{"color":"#5936e2","polygonCount":25,"customerCount":1476,"orderCount":3918},{"color":"#c036e2","polygonCount":15,"customerCount":1493,"orderCount":4504},{"color":"#e2369d","polygonCount":10,"customerCount":1494,"orderCount":4609}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T18:51:32.179Z', '2026-05-07T18:54:12.508Z', '2026-05-07T18:51:32.168Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (61, 1, 'cancelled', 0, 124, 'Cancelled by admin', '2026-05-07T18:54:53.180Z', NULL, '2026-05-07T18:54:53.171Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (62, 1, 'done', 148, 148, '{"iterations":148,"filteredSolutions":50,"bestRho":0.19739071154065202,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":19,"customerCount":1505,"orderCount":3360},{"color":"#e29d36","polygonCount":13,"customerCount":1491,"orderCount":4348},{"color":"#c0e236","polygonCount":13,"customerCount":1437,"orderCount":3274},{"color":"#59e236","polygonCount":12,"customerCount":1649,"orderCount":4914},{"color":"#36e27b","polygonCount":18,"customerCount":1476,"orderCount":3698},{"color":"#36e2e2","polygonCount":9,"customerCount":1502,"orderCount":4261},{"color":"#367be2","polygonCount":26,"customerCount":1496,"orderCount":4386},{"color":"#5936e2","polygonCount":9,"customerCount":1427,"orderCount":2407},{"color":"#c036e2","polygonCount":14,"customerCount":1503,"orderCount":4429},{"color":"#e2369d","polygonCount":8,"customerCount":1514,"orderCount":4923}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T19:01:05.390Z', '2026-05-07T19:03:47.921Z', '2026-05-07T19:01:05.384Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (63, 1, 'done', 137, 137, '{"iterations":137,"filteredSolutions":50,"bestRho":0.18967187862463056,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":18,"customerCount":1503,"orderCount":3885},{"color":"#e29d36","polygonCount":14,"customerCount":1505,"orderCount":4339},{"color":"#c0e236","polygonCount":17,"customerCount":1493,"orderCount":4198},{"color":"#59e236","polygonCount":15,"customerCount":1498,"orderCount":4445},{"color":"#36e27b","polygonCount":9,"customerCount":1511,"orderCount":3606},{"color":"#36e2e2","polygonCount":8,"customerCount":1465,"orderCount":2607},{"color":"#367be2","polygonCount":8,"customerCount":1490,"orderCount":4897},{"color":"#5936e2","polygonCount":25,"customerCount":1502,"orderCount":3048},{"color":"#c036e2","polygonCount":20,"customerCount":1500,"orderCount":4081},{"color":"#e2369d","polygonCount":7,"customerCount":1533,"orderCount":4894}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T19:08:59.164Z', '2026-05-07T19:11:33.740Z', '2026-05-07T19:08:59.160Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (64, 1, 'done', 125, 125, '{"iterations":125,"filteredSolutions":50,"bestRho":0.20327751362133117,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":22,"customerCount":1451,"orderCount":3837},{"color":"#e29d36","polygonCount":9,"customerCount":1603,"orderCount":5227},{"color":"#c0e236","polygonCount":11,"customerCount":1546,"orderCount":4716},{"color":"#59e236","polygonCount":13,"customerCount":1494,"orderCount":4051},{"color":"#36e27b","polygonCount":24,"customerCount":1497,"orderCount":3247},{"color":"#36e2e2","polygonCount":7,"customerCount":1498,"orderCount":3326},{"color":"#367be2","polygonCount":23,"customerCount":1384,"orderCount":3997},{"color":"#5936e2","polygonCount":15,"customerCount":1501,"orderCount":3957},{"color":"#c036e2","polygonCount":10,"customerCount":1537,"orderCount":2747},{"color":"#e2369d","polygonCount":7,"customerCount":1489,"orderCount":4895}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T19:18:04.360Z', '2026-05-07T19:20:17.148Z', '2026-05-07T19:18:04.353Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (65, 5, 'done', 123, 123, '{"iterations":123,"filteredSolutions":50,"bestRho":0.25648698395674635,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":2013,"orderCount":4330},{"color":"#e2e236","polygonCount":13,"customerCount":1939,"orderCount":5013},{"color":"#36e236","polygonCount":11,"customerCount":1975,"orderCount":7791},{"color":"#36e2e2","polygonCount":7,"customerCount":2090,"orderCount":5486},{"color":"#3636e2","polygonCount":8,"customerCount":2023,"orderCount":4459},{"color":"#e236e2","polygonCount":9,"customerCount":1960,"orderCount":7921}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-07T19:22:16.318Z', '2026-05-07T19:22:36.793Z', '2026-05-07T19:22:16.314Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (66, 1, 'done', 139, 139, '{"iterations":139,"filteredSolutions":50,"bestRho":0.16198521308338162,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":1486,"orderCount":4670},{"color":"#e29d36","polygonCount":12,"customerCount":1525,"orderCount":4516},{"color":"#c0e236","polygonCount":11,"customerCount":1495,"orderCount":4612},{"color":"#59e236","polygonCount":24,"customerCount":1500,"orderCount":3481},{"color":"#36e27b","polygonCount":13,"customerCount":1464,"orderCount":3605},{"color":"#36e2e2","polygonCount":9,"customerCount":1523,"orderCount":2719},{"color":"#367be2","polygonCount":21,"customerCount":1476,"orderCount":3011},{"color":"#5936e2","polygonCount":10,"customerCount":1536,"orderCount":4590},{"color":"#c036e2","polygonCount":16,"customerCount":1499,"orderCount":4528},{"color":"#e2369d","polygonCount":11,"customerCount":1496,"orderCount":4268}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T04:29:23.181Z', '2026-05-08T04:33:01.625Z', '2026-05-08T04:29:23.168Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (67, 1, 'done', 141, 141, '{"iterations":141,"filteredSolutions":50,"bestRho":0.16786174827276001,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":27,"customerCount":1501,"orderCount":3393},{"color":"#e29d36","polygonCount":16,"customerCount":1578,"orderCount":4772},{"color":"#c0e236","polygonCount":14,"customerCount":1499,"orderCount":4977},{"color":"#59e236","polygonCount":14,"customerCount":1434,"orderCount":4327},{"color":"#36e27b","polygonCount":12,"customerCount":1567,"orderCount":4338},{"color":"#36e2e2","polygonCount":14,"customerCount":1409,"orderCount":2625},{"color":"#367be2","polygonCount":9,"customerCount":1499,"orderCount":3961},{"color":"#5936e2","polygonCount":14,"customerCount":1514,"orderCount":4610},{"color":"#c036e2","polygonCount":9,"customerCount":1523,"orderCount":2719},{"color":"#e2369d","polygonCount":12,"customerCount":1476,"orderCount":4278}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:04:46.857Z', '2026-05-08T05:07:48.688Z', '2026-05-08T05:04:46.840Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (68, 1, 'done', 138, 138, '{"iterations":138,"filteredSolutions":50,"bestRho":0.2538101858054381,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":59,"customerCount":5003,"orderCount":13973},{"color":"#36e236","polygonCount":35,"customerCount":5000,"orderCount":13123},{"color":"#3636e2","polygonCount":47,"customerCount":4997,"orderCount":12904}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:10:35.099Z', '2026-05-08T05:18:05.713Z', '2026-05-08T05:10:35.094Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (69, 1, 'done', 116, 116, '{"iterations":116,"filteredSolutions":50,"bestRho":0.16403384187575204,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":13,"customerCount":1500,"orderCount":4688},{"color":"#e29d36","polygonCount":14,"customerCount":1434,"orderCount":4327},{"color":"#c0e236","polygonCount":12,"customerCount":1503,"orderCount":4179},{"color":"#59e236","polygonCount":25,"customerCount":1500,"orderCount":3426},{"color":"#36e27b","polygonCount":16,"customerCount":1578,"orderCount":4772},{"color":"#36e2e2","polygonCount":15,"customerCount":1509,"orderCount":4572},{"color":"#367be2","polygonCount":9,"customerCount":1523,"orderCount":2719},{"color":"#5936e2","polygonCount":15,"customerCount":1454,"orderCount":2840},{"color":"#c036e2","polygonCount":10,"customerCount":1523,"orderCount":4199},{"color":"#e2369d","polygonCount":12,"customerCount":1476,"orderCount":4278}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:19:15.926Z', '2026-05-08T05:19:44.574Z', '2026-05-08T05:19:15.915Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (70, 1, 'done', 101, 101, '{"iterations":101,"filteredSolutions":50,"bestRho":0.16215137022489945,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":1506,"orderCount":4509},{"color":"#e29d36","polygonCount":9,"customerCount":1523,"orderCount":2719},{"color":"#c0e236","polygonCount":11,"customerCount":1455,"orderCount":4255},{"color":"#59e236","polygonCount":13,"customerCount":1537,"orderCount":3862},{"color":"#36e27b","polygonCount":23,"customerCount":1494,"orderCount":4679},{"color":"#36e2e2","polygonCount":18,"customerCount":1495,"orderCount":2825},{"color":"#367be2","polygonCount":16,"customerCount":1495,"orderCount":4425},{"color":"#5936e2","polygonCount":13,"customerCount":1498,"orderCount":4617},{"color":"#c036e2","polygonCount":14,"customerCount":1447,"orderCount":4030},{"color":"#e2369d","polygonCount":12,"customerCount":1496,"orderCount":4271}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:21:44.917Z', '2026-05-08T05:22:10.823Z', '2026-05-08T05:21:44.912Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (71, 1, 'done', 100, 100, '{"iterations":100,"filteredSolutions":50,"bestRho":0.8469195773822038,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":1951,"orderCount":4535},{"color":"#e29d36","polygonCount":9,"customerCount":914,"orderCount":2351},{"color":"#c0e236","polygonCount":22,"customerCount":1810,"orderCount":5582},{"color":"#59e236","polygonCount":13,"customerCount":1105,"orderCount":2968},{"color":"#36e27b","polygonCount":12,"customerCount":1642,"orderCount":4965},{"color":"#36e2e2","polygonCount":16,"customerCount":1934,"orderCount":4491},{"color":"#367be2","polygonCount":12,"customerCount":1485,"orderCount":3999},{"color":"#5936e2","polygonCount":10,"customerCount":1751,"orderCount":5740},{"color":"#c036e2","polygonCount":27,"customerCount":1846,"orderCount":4582},{"color":"#e2369d","polygonCount":6,"customerCount":508,"orderCount":979}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:25:19.617Z', '2026-05-08T05:25:35.643Z', '2026-05-08T05:25:19.603Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (72, 1, 'done', 101, 101, '{"iterations":101,"filteredSolutions":50,"bestRho":0.7676851000034766,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":1121,"orderCount":2715},{"color":"#e29d36","polygonCount":12,"customerCount":481,"orderCount":1110},{"color":"#c0e236","polygonCount":6,"customerCount":1485,"orderCount":3843},{"color":"#59e236","polygonCount":12,"customerCount":1196,"orderCount":3147},{"color":"#36e27b","polygonCount":16,"customerCount":2086,"orderCount":4852},{"color":"#36e2e2","polygonCount":26,"customerCount":2706,"orderCount":6647},{"color":"#367be2","polygonCount":23,"customerCount":3012,"orderCount":6519},{"color":"#5936e2","polygonCount":12,"customerCount":614,"orderCount":1729},{"color":"#c036e2","polygonCount":15,"customerCount":1528,"orderCount":3050},{"color":"#e2369d","polygonCount":4,"customerCount":771,"orderCount":1388}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:48:29.012Z', '2026-05-08T05:48:46.982Z', '2026-05-08T05:48:28.999Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (73, 1, 'error', 0, 129, 'Identifier ''balanceWeight'' has already been declared', '2026-05-08T05:54:02.209Z', '2026-05-08T05:54:02.303Z', '2026-05-08T05:54:02.194Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (74, 1, 'error', 0, 110, 'Identifier ''balanceWeight'' has already been declared', '2026-05-08T05:54:19.680Z', '2026-05-08T05:54:19.760Z', '2026-05-08T05:54:19.676Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (75, 1, 'done', 146, 146, '{"iterations":146,"filteredSolutions":50,"bestRho":0.7644812941264594,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":13,"customerCount":1308,"orderCount":2751},{"color":"#e29d36","polygonCount":8,"customerCount":1922,"orderCount":3888},{"color":"#c0e236","polygonCount":12,"customerCount":481,"orderCount":1110},{"color":"#59e236","polygonCount":21,"customerCount":1240,"orderCount":2507},{"color":"#36e27b","polygonCount":9,"customerCount":1657,"orderCount":3609},{"color":"#36e2e2","polygonCount":6,"customerCount":1485,"orderCount":3843},{"color":"#367be2","polygonCount":17,"customerCount":1400,"orderCount":3796},{"color":"#5936e2","polygonCount":19,"customerCount":2253,"orderCount":5605},{"color":"#c036e2","polygonCount":16,"customerCount":2086,"orderCount":4852},{"color":"#e2369d","polygonCount":20,"customerCount":1168,"orderCount":3039}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:54:45.690Z', '2026-05-08T05:55:09.712Z', '2026-05-08T05:54:45.685Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (76, 1, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.8153705520226256,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":21,"customerCount":1816,"orderCount":4072},{"color":"#e29d36","polygonCount":6,"customerCount":1977,"orderCount":5138},{"color":"#c0e236","polygonCount":8,"customerCount":1419,"orderCount":3156},{"color":"#59e236","polygonCount":17,"customerCount":1607,"orderCount":3374},{"color":"#36e27b","polygonCount":16,"customerCount":1205,"orderCount":2706},{"color":"#36e2e2","polygonCount":25,"customerCount":1741,"orderCount":4589},{"color":"#367be2","polygonCount":2,"customerCount":402,"orderCount":693},{"color":"#5936e2","polygonCount":16,"customerCount":1738,"orderCount":3808},{"color":"#c036e2","polygonCount":11,"customerCount":1818,"orderCount":4027},{"color":"#e2369d","polygonCount":19,"customerCount":1277,"orderCount":3437}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:55:54.375Z', '2026-05-08T05:56:18.404Z', '2026-05-08T05:55:54.371Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (77, 1, 'done', 139, 139, '{"iterations":139,"filteredSolutions":50,"bestRho":0.7789127283318547,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1274,"orderCount":2905},{"color":"#e29d36","polygonCount":4,"customerCount":1083,"orderCount":3150},{"color":"#c0e236","polygonCount":22,"customerCount":1765,"orderCount":4069},{"color":"#59e236","polygonCount":2,"customerCount":283,"orderCount":285},{"color":"#36e27b","polygonCount":20,"customerCount":1985,"orderCount":4817},{"color":"#36e2e2","polygonCount":14,"customerCount":2253,"orderCount":4802},{"color":"#367be2","polygonCount":25,"customerCount":1800,"orderCount":4869},{"color":"#5936e2","polygonCount":12,"customerCount":1164,"orderCount":3102},{"color":"#c036e2","polygonCount":12,"customerCount":1819,"orderCount":4030},{"color":"#e2369d","polygonCount":18,"customerCount":1172,"orderCount":2278}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T05:57:44.072Z', '2026-05-08T05:58:04.347Z', '2026-05-08T05:57:44.066Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (78, 1, 'done', 110, 110, '{"iterations":110,"filteredSolutions":50,"bestRho":0.21030070660571143,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":1456,"orderCount":4321},{"color":"#e29d36","polygonCount":21,"customerCount":1268,"orderCount":3162},{"color":"#c0e236","polygonCount":18,"customerCount":1485,"orderCount":3056},{"color":"#59e236","polygonCount":14,"customerCount":1552,"orderCount":3215},{"color":"#36e27b","polygonCount":16,"customerCount":1584,"orderCount":3032},{"color":"#36e2e2","polygonCount":13,"customerCount":1242,"orderCount":2925},{"color":"#367be2","polygonCount":14,"customerCount":1450,"orderCount":2218},{"color":"#5936e2","polygonCount":12,"customerCount":1464,"orderCount":3697},{"color":"#c036e2","polygonCount":2,"customerCount":1627,"orderCount":4521},{"color":"#e2369d","polygonCount":14,"customerCount":1470,"orderCount":4160}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:00:37.081Z', '2026-05-08T06:01:04.654Z', '2026-05-08T06:00:37.074Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (79, 1, 'error', 0, 145, 'Identifier ''balanceWeight'' has already been declared', '2026-05-08T06:08:33.596Z', '2026-05-08T06:08:33.698Z', '2026-05-08T06:08:33.574Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (80, 1, 'done', 135, 135, '{"iterations":135,"filteredSolutions":50,"bestRho":0.7415240111837982,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":1443,"orderCount":2761},{"color":"#e29d36","polygonCount":20,"customerCount":1387,"orderCount":2803},{"color":"#c0e236","polygonCount":2,"customerCount":1627,"orderCount":4521},{"color":"#59e236","polygonCount":12,"customerCount":1401,"orderCount":3301},{"color":"#36e27b","polygonCount":18,"customerCount":1610,"orderCount":3246},{"color":"#36e2e2","polygonCount":10,"customerCount":1563,"orderCount":3764},{"color":"#367be2","polygonCount":21,"customerCount":1393,"orderCount":3943},{"color":"#5936e2","polygonCount":17,"customerCount":1407,"orderCount":3632},{"color":"#c036e2","polygonCount":14,"customerCount":1384,"orderCount":3100},{"color":"#e2369d","polygonCount":11,"customerCount":1383,"orderCount":3236}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:09:29.607Z', '2026-05-08T06:09:52.896Z', '2026-05-08T06:09:29.593Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (81, 1, 'done', 141, 141, '{"iterations":141,"filteredSolutions":50,"bestRho":1.0245620223129484,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":14,"customerCount":952,"orderCount":2010},{"color":"#e27b36","polygonCount":2,"customerCount":1110,"orderCount":2406},{"color":"#e2c036","polygonCount":16,"customerCount":940,"orderCount":2341},{"color":"#c0e236","polygonCount":10,"customerCount":886,"orderCount":1689},{"color":"#7be236","polygonCount":19,"customerCount":981,"orderCount":2538},{"color":"#36e236","polygonCount":11,"customerCount":936,"orderCount":2144},{"color":"#36e27b","polygonCount":3,"customerCount":1111,"orderCount":2704},{"color":"#36e2c0","polygonCount":13,"customerCount":935,"orderCount":2396},{"color":"#36c0e2","polygonCount":9,"customerCount":926,"orderCount":1851},{"color":"#367be2","polygonCount":4,"customerCount":1083,"orderCount":3150},{"color":"#3636e2","polygonCount":12,"customerCount":949,"orderCount":1855},{"color":"#7b36e2","polygonCount":5,"customerCount":952,"orderCount":2346},{"color":"#c036e2","polygonCount":5,"customerCount":890,"orderCount":2158},{"color":"#e236c0","polygonCount":11,"customerCount":1015,"orderCount":1988},{"color":"#e2367b","polygonCount":5,"customerCount":932,"orderCount":2731}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:10:20.900Z', '2026-05-08T06:10:37.165Z', '2026-05-08T06:10:20.895Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (82, 1, 'done', 132, 132, '{"iterations":132,"filteredSolutions":50,"bestRho":0.7774080580647063,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":21,"customerCount":1464,"orderCount":3067},{"color":"#e29d36","polygonCount":10,"customerCount":1548,"orderCount":2997},{"color":"#c0e236","polygonCount":7,"customerCount":1463,"orderCount":4416},{"color":"#59e236","polygonCount":22,"customerCount":1452,"orderCount":3404},{"color":"#36e27b","polygonCount":12,"customerCount":1513,"orderCount":3653},{"color":"#36e2e2","polygonCount":23,"customerCount":1467,"orderCount":2612},{"color":"#367be2","polygonCount":5,"customerCount":1699,"orderCount":4744},{"color":"#5936e2","polygonCount":9,"customerCount":1451,"orderCount":2840},{"color":"#c036e2","polygonCount":17,"customerCount":1454,"orderCount":3327},{"color":"#e2369d","polygonCount":13,"customerCount":1489,"orderCount":3940}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:15:02.580Z', '2026-05-08T06:15:29.772Z', '2026-05-08T06:15:02.576Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (83, 1, 'error', 0, 142, 'Identifier ''hue'' has already been declared', '2026-05-08T06:17:54.604Z', '2026-05-08T06:17:54.720Z', '2026-05-08T06:17:54.601Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (84, 1, 'done', 124, 124, 'Final Balancing — Cân bằng lại số lượng khách hàng...', '2026-05-08T06:18:19.694Z', '2026-05-08T06:18:29.390Z', '2026-05-08T06:18:19.690Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (85, 1, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.9531399460796155,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":17,"customerCount":1193,"orderCount":2735},{"color":"#c036e2","polygonCount":5,"customerCount":960,"orderCount":2595},{"color":"#c0e236","polygonCount":4,"customerCount":1202,"orderCount":2562},{"color":"#36e27b","polygonCount":7,"customerCount":1071,"orderCount":2752},{"color":"#e27b36","polygonCount":10,"customerCount":856,"orderCount":1750},{"color":"#36c0e2","polygonCount":4,"customerCount":941,"orderCount":2605},{"color":"#367be2","polygonCount":5,"customerCount":873,"orderCount":2358},{"color":"#36e2c0","polygonCount":15,"customerCount":1066,"orderCount":2739},{"color":"#36e236","polygonCount":7,"customerCount":936,"orderCount":2049},{"color":"#e236c0","polygonCount":16,"customerCount":820,"orderCount":1420},{"color":"#7b36e2","polygonCount":9,"customerCount":876,"orderCount":1269},{"color":"#e2c036","polygonCount":3,"customerCount":1165,"orderCount":3057},{"color":"#7be236","polygonCount":13,"customerCount":1108,"orderCount":2293},{"color":"#e2367b","polygonCount":16,"customerCount":1095,"orderCount":2928},{"color":"#3636e2","polygonCount":8,"customerCount":838,"orderCount":1888}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:19:01.943Z', '2026-05-08T06:19:17.170Z', '2026-05-08T06:19:01.939Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (86, 1, 'done', 136, 136, '{"iterations":136,"filteredSolutions":50,"bestRho":0.9969439573672741,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e236d1","polygonCount":4,"customerCount":980,"orderCount":3103},{"color":"#e2369d","polygonCount":3,"customerCount":745,"orderCount":1962},{"color":"#36e247","polygonCount":3,"customerCount":636,"orderCount":1803},{"color":"#36e2af","polygonCount":6,"customerCount":603,"orderCount":723},{"color":"#36e27b","polygonCount":8,"customerCount":588,"orderCount":1183},{"color":"#8c36e2","polygonCount":4,"customerCount":846,"orderCount":2374},{"color":"#59e236","polygonCount":8,"customerCount":761,"orderCount":1391},{"color":"#36e2e2","polygonCount":10,"customerCount":796,"orderCount":1881},{"color":"#e26a36","polygonCount":7,"customerCount":590,"orderCount":1138},{"color":"#e2366a","polygonCount":10,"customerCount":640,"orderCount":1165},{"color":"#e29d36","polygonCount":3,"customerCount":694,"orderCount":1217},{"color":"#e2d136","polygonCount":11,"customerCount":825,"orderCount":1680},{"color":"#e23636","polygonCount":14,"customerCount":704,"orderCount":1430},{"color":"#c0e236","polygonCount":5,"customerCount":721,"orderCount":1651},{"color":"#3647e2","polygonCount":6,"customerCount":797,"orderCount":1726},{"color":"#36afe2","polygonCount":3,"customerCount":1165,"orderCount":3057},{"color":"#367be2","polygonCount":4,"customerCount":809,"orderCount":2184},{"color":"#c036e2","polygonCount":11,"customerCount":590,"orderCount":1302},{"color":"#5936e2","polygonCount":7,"customerCount":593,"orderCount":1265},{"color":"#8ce236","polygonCount":12,"customerCount":917,"orderCount":2765}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:20:17.965Z', '2026-05-08T06:20:31.369Z', '2026-05-08T06:20:17.962Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (87, 1, 'done', 101, 101, '{"iterations":101,"filteredSolutions":50,"bestRho":0.8110566271586144,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#36e261","polygonCount":26,"customerCount":1660,"orderCount":3799},{"color":"#e2b736","polygonCount":13,"customerCount":2111,"orderCount":4773},{"color":"#e236b7","polygonCount":12,"customerCount":1671,"orderCount":4625},{"color":"#36e2e2","polygonCount":15,"customerCount":2024,"orderCount":4238},{"color":"#e23636","polygonCount":15,"customerCount":1679,"orderCount":3755},{"color":"#3661e2","polygonCount":26,"customerCount":2106,"orderCount":4293},{"color":"#8c36e2","polygonCount":16,"customerCount":1670,"orderCount":3881},{"color":"#8ce236","polygonCount":16,"customerCount":2079,"orderCount":5636}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:26:01.182Z', '2026-05-08T06:26:14.941Z', '2026-05-08T06:26:01.154Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (88, 1, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.029117309867542206,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1536,"orderCount":3927},{"color":"#e29d36","polygonCount":20,"customerCount":1501,"orderCount":3482},{"color":"#c0e236","polygonCount":13,"customerCount":1493,"orderCount":2876},{"color":"#59e236","polygonCount":7,"customerCount":1513,"orderCount":3745},{"color":"#36e27b","polygonCount":12,"customerCount":1508,"orderCount":4250},{"color":"#36e2e2","polygonCount":17,"customerCount":1548,"orderCount":3720},{"color":"#367be2","polygonCount":14,"customerCount":1510,"orderCount":3159},{"color":"#5936e2","polygonCount":17,"customerCount":1503,"orderCount":3055},{"color":"#c036e2","polygonCount":11,"customerCount":1397,"orderCount":3830},{"color":"#e2369d","polygonCount":18,"customerCount":1491,"orderCount":2956}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:30:13.099Z', '2026-05-08T06:30:46.304Z', '2026-05-08T06:30:13.091Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (89, 1, 'done', 137, 137, '{"iterations":137,"filteredSolutions":50,"bestRho":0.03135550578354236,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1474,"orderCount":4051},{"color":"#e29d36","polygonCount":17,"customerCount":1557,"orderCount":3039},{"color":"#c0e236","polygonCount":16,"customerCount":1490,"orderCount":3477},{"color":"#59e236","polygonCount":15,"customerCount":1511,"orderCount":4003},{"color":"#36e27b","polygonCount":16,"customerCount":1499,"orderCount":3503},{"color":"#36e2e2","polygonCount":15,"customerCount":1504,"orderCount":2762},{"color":"#367be2","polygonCount":12,"customerCount":1401,"orderCount":3842},{"color":"#5936e2","polygonCount":8,"customerCount":1502,"orderCount":3237},{"color":"#c036e2","polygonCount":11,"customerCount":1572,"orderCount":3816},{"color":"#e2369d","polygonCount":19,"customerCount":1490,"orderCount":3270}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:39:39.873Z', '2026-05-08T06:40:12.196Z', '2026-05-08T06:39:39.860Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (90, 1, 'done', 107, 107, '{"iterations":107,"filteredSolutions":50,"bestRho":0.02393114306267128,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":13,"customerCount":1489,"orderCount":3940},{"color":"#e29d36","polygonCount":16,"customerCount":1499,"orderCount":3503},{"color":"#c0e236","polygonCount":11,"customerCount":1572,"orderCount":3816},{"color":"#59e236","polygonCount":16,"customerCount":1490,"orderCount":3477},{"color":"#36e27b","polygonCount":16,"customerCount":1469,"orderCount":2941},{"color":"#36e2e2","polygonCount":10,"customerCount":1474,"orderCount":4051},{"color":"#367be2","polygonCount":15,"customerCount":1511,"orderCount":4003},{"color":"#5936e2","polygonCount":15,"customerCount":1504,"orderCount":2762},{"color":"#c036e2","polygonCount":19,"customerCount":1490,"orderCount":3270},{"color":"#e2369d","polygonCount":8,"customerCount":1502,"orderCount":3237}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T06:59:18.217Z', '2026-05-08T06:59:53.992Z', '2026-05-08T06:59:18.199Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (91, 1, 'done', 124, 124, '{"iterations":124,"filteredSolutions":50,"bestRho":0.032415537878093086,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":12,"customerCount":1499,"orderCount":3749},{"color":"#e29d36","polygonCount":13,"customerCount":1493,"orderCount":2876},{"color":"#c0e236","polygonCount":16,"customerCount":1500,"orderCount":3562},{"color":"#59e236","polygonCount":14,"customerCount":1500,"orderCount":2758},{"color":"#36e27b","polygonCount":18,"customerCount":1486,"orderCount":3603},{"color":"#36e2e2","polygonCount":11,"customerCount":1397,"orderCount":3830},{"color":"#367be2","polygonCount":19,"customerCount":1495,"orderCount":3187},{"color":"#5936e2","polygonCount":6,"customerCount":1515,"orderCount":3479},{"color":"#c036e2","polygonCount":10,"customerCount":1578,"orderCount":4331},{"color":"#e2369d","polygonCount":20,"customerCount":1537,"orderCount":3625}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T09:07:27.115Z', '2026-05-08T09:08:02.458Z', '2026-05-08T09:07:27.097Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (92, 1, 'done', 126, 126, '{"iterations":126,"filteredSolutions":50,"bestRho":0.7710941492394028,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#c036e2","polygonCount":9,"customerCount":1590,"orderCount":3007},{"color":"#e2369d","polygonCount":17,"customerCount":1491,"orderCount":3559},{"color":"#e23636","polygonCount":17,"customerCount":1541,"orderCount":3457},{"color":"#36e27b","polygonCount":20,"customerCount":1459,"orderCount":3480},{"color":"#5936e2","polygonCount":11,"customerCount":1580,"orderCount":3661},{"color":"#36e2e2","polygonCount":16,"customerCount":1466,"orderCount":3627},{"color":"#59e236","polygonCount":13,"customerCount":1380,"orderCount":2688},{"color":"#367be2","polygonCount":13,"customerCount":1404,"orderCount":3845},{"color":"#e29d36","polygonCount":5,"customerCount":1560,"orderCount":4835},{"color":"#c0e236","polygonCount":18,"customerCount":1529,"orderCount":2841}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T09:09:27.698Z', '2026-05-08T09:09:39.993Z', '2026-05-08T09:09:27.687Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (93, 1, 'done', 108, 108, '{"iterations":108,"filteredSolutions":50,"bestRho":0.8553338696467321,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":16,"customerCount":1582,"orderCount":4180},{"color":"#e29d36","polygonCount":10,"customerCount":1380,"orderCount":3813},{"color":"#e2369d","polygonCount":24,"customerCount":1454,"orderCount":2658},{"color":"#367be2","polygonCount":11,"customerCount":1572,"orderCount":3248},{"color":"#36e2e2","polygonCount":15,"customerCount":1498,"orderCount":3705},{"color":"#5936e2","polygonCount":12,"customerCount":1460,"orderCount":3504},{"color":"#c036e2","polygonCount":9,"customerCount":1390,"orderCount":2803},{"color":"#36e27b","polygonCount":5,"customerCount":1602,"orderCount":4927},{"color":"#59e236","polygonCount":21,"customerCount":1473,"orderCount":2466},{"color":"#c0e236","polygonCount":16,"customerCount":1589,"orderCount":3696}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T09:10:37.213Z', '2026-05-08T09:10:48.520Z', '2026-05-08T09:10:37.209Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (94, 1, 'done', 143, 143, '{"iterations":143,"filteredSolutions":50,"bestRho":0.023309066034321473,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":17,"customerCount":1495,"orderCount":3483},{"color":"#e29d36","polygonCount":13,"customerCount":1489,"orderCount":3940},{"color":"#c0e236","polygonCount":13,"customerCount":1505,"orderCount":3993},{"color":"#59e236","polygonCount":10,"customerCount":1474,"orderCount":4051},{"color":"#36e27b","polygonCount":11,"customerCount":1572,"orderCount":3816},{"color":"#36e2e2","polygonCount":21,"customerCount":1496,"orderCount":3280},{"color":"#367be2","polygonCount":14,"customerCount":1499,"orderCount":2756},{"color":"#5936e2","polygonCount":16,"customerCount":1469,"orderCount":2941},{"color":"#c036e2","polygonCount":16,"customerCount":1499,"orderCount":3503},{"color":"#e2369d","polygonCount":8,"customerCount":1502,"orderCount":3237}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T09:14:27.517Z', '2026-05-08T09:15:05.450Z', '2026-05-08T09:14:27.501Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (95, 1, 'error', 113, 113, 'lambda is not defined', '2026-05-08T10:04:34.860Z', '2026-05-08T10:04:37.203Z', '2026-05-08T10:04:34.834Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (96, 1, 'done', 139, 139, '{"iterations":139,"filteredSolutions":50,"bestRho":0.020938312602252346,"localSearchMoves":1807,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":18,"customerCount":1498,"orderCount":3121},{"color":"#e29d36","polygonCount":14,"customerCount":1492,"orderCount":3943},{"color":"#c0e236","polygonCount":14,"customerCount":1499,"orderCount":3247},{"color":"#59e236","polygonCount":13,"customerCount":1476,"orderCount":2792},{"color":"#36e27b","polygonCount":12,"customerCount":1513,"orderCount":3506},{"color":"#36e2e2","polygonCount":8,"customerCount":1523,"orderCount":4595},{"color":"#367be2","polygonCount":14,"customerCount":1502,"orderCount":3653},{"color":"#5936e2","polygonCount":7,"customerCount":1513,"orderCount":3745},{"color":"#c036e2","polygonCount":21,"customerCount":1494,"orderCount":3684},{"color":"#e2369d","polygonCount":18,"customerCount":1490,"orderCount":2714}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:06:59.499Z', '2026-05-08T10:07:06.757Z', '2026-05-08T10:06:59.490Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (97, 1, 'done', 148, 148, '{"iterations":148,"filteredSolutions":50,"bestRho":0.023303960823942874,"localSearchMoves":1701,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1505,"orderCount":4505},{"color":"#e29d36","polygonCount":19,"customerCount":1499,"orderCount":3427},{"color":"#c0e236","polygonCount":17,"customerCount":1499,"orderCount":3183},{"color":"#59e236","polygonCount":14,"customerCount":1495,"orderCount":3162},{"color":"#36e27b","polygonCount":11,"customerCount":1529,"orderCount":3683},{"color":"#36e2e2","polygonCount":13,"customerCount":1522,"orderCount":3183},{"color":"#367be2","polygonCount":18,"customerCount":1481,"orderCount":2649},{"color":"#5936e2","polygonCount":11,"customerCount":1468,"orderCount":3629},{"color":"#c036e2","polygonCount":11,"customerCount":1501,"orderCount":4374},{"color":"#e2369d","polygonCount":15,"customerCount":1501,"orderCount":3205}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:29:45.076Z', '2026-05-08T10:29:52.642Z', '2026-05-08T10:29:45.038Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (98, 1, 'done', 149, 149, '{"iterations":149,"filteredSolutions":50,"bestRho":0.021088366854332654,"localSearchMoves":1952,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":8,"customerCount":1504,"orderCount":4556},{"color":"#e29d36","polygonCount":18,"customerCount":1511,"orderCount":3263},{"color":"#c0e236","polygonCount":17,"customerCount":1500,"orderCount":3087},{"color":"#59e236","polygonCount":14,"customerCount":1497,"orderCount":3200},{"color":"#36e27b","polygonCount":16,"customerCount":1495,"orderCount":3275},{"color":"#36e2e2","polygonCount":15,"customerCount":1515,"orderCount":3578},{"color":"#367be2","polygonCount":14,"customerCount":1504,"orderCount":2974},{"color":"#5936e2","polygonCount":6,"customerCount":1477,"orderCount":3702},{"color":"#c036e2","polygonCount":16,"customerCount":1503,"orderCount":3686},{"color":"#e2369d","polygonCount":15,"customerCount":1494,"orderCount":3679}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:31:24.275Z', '2026-05-08T10:31:31.742Z', '2026-05-08T10:31:24.265Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (99, 1, 'done', 148, 148, '{"iterations":148,"filteredSolutions":50,"bestRho":0.02796633693449474,"localSearchMoves":1637,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":10,"customerCount":1515,"orderCount":4572},{"color":"#e29d36","polygonCount":14,"customerCount":1492,"orderCount":3943},{"color":"#c0e236","polygonCount":18,"customerCount":1451,"orderCount":3278},{"color":"#59e236","polygonCount":17,"customerCount":1484,"orderCount":2756},{"color":"#36e27b","polygonCount":11,"customerCount":1506,"orderCount":3147},{"color":"#36e2e2","polygonCount":10,"customerCount":1496,"orderCount":3744},{"color":"#367be2","polygonCount":15,"customerCount":1471,"orderCount":2967},{"color":"#5936e2","polygonCount":10,"customerCount":1592,"orderCount":4290},{"color":"#c036e2","polygonCount":16,"customerCount":1494,"orderCount":2990},{"color":"#e2369d","polygonCount":18,"customerCount":1499,"orderCount":3313}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:36:22.169Z', '2026-05-08T10:36:28.674Z', '2026-05-08T10:36:22.144Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (100, 1, 'done', 100, 100, '{"iterations":100,"filteredSolutions":50,"bestRho":0.04466053466418961,"localSearchMoves":1598,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":22,"customerCount":1498,"orderCount":3168},{"color":"#e29d36","polygonCount":16,"customerCount":1431,"orderCount":3409},{"color":"#c0e236","polygonCount":16,"customerCount":1490,"orderCount":2843},{"color":"#59e236","polygonCount":14,"customerCount":1498,"orderCount":3733},{"color":"#36e27b","polygonCount":13,"customerCount":1517,"orderCount":3616},{"color":"#36e2e2","polygonCount":13,"customerCount":1539,"orderCount":3219},{"color":"#367be2","polygonCount":9,"customerCount":1436,"orderCount":3562},{"color":"#5936e2","polygonCount":10,"customerCount":1581,"orderCount":4189},{"color":"#c036e2","polygonCount":11,"customerCount":1397,"orderCount":4222},{"color":"#e2369d","polygonCount":15,"customerCount":1613,"orderCount":3039}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:42:28.055Z', '2026-05-08T10:42:34.046Z', '2026-05-08T10:42:28.040Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (101, 1, 'done', 144, 144, '{"iterations":144,"filteredSolutions":50,"bestRho":0.025005461743626223,"localSearchMoves":1509,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":11,"customerCount":1533,"orderCount":4660},{"color":"#e29d36","polygonCount":17,"customerCount":1506,"orderCount":3512},{"color":"#c0e236","polygonCount":15,"customerCount":1508,"orderCount":2830},{"color":"#59e236","polygonCount":14,"customerCount":1492,"orderCount":3943},{"color":"#36e27b","polygonCount":16,"customerCount":1503,"orderCount":3129},{"color":"#36e2e2","polygonCount":16,"customerCount":1531,"orderCount":2986},{"color":"#367be2","polygonCount":7,"customerCount":1513,"orderCount":3745},{"color":"#5936e2","polygonCount":13,"customerCount":1496,"orderCount":3243},{"color":"#c036e2","polygonCount":14,"customerCount":1451,"orderCount":3338},{"color":"#e2369d","polygonCount":16,"customerCount":1467,"orderCount":3614}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T10:43:31.415Z', '2026-05-08T10:43:38.351Z', '2026-05-08T10:43:31.395Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (102, 1, 'done', 131, 131, '{"iterations":131,"filteredSolutions":50,"bestRho":0.0337751644821801,"localSearchMoves":1562,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":19,"customerCount":1505,"orderCount":3244},{"color":"#e29d36","polygonCount":21,"customerCount":1587,"orderCount":3773},{"color":"#c0e236","polygonCount":7,"customerCount":1513,"orderCount":3745},{"color":"#59e236","polygonCount":15,"customerCount":1385,"orderCount":2763},{"color":"#36e27b","polygonCount":13,"customerCount":1516,"orderCount":3737},{"color":"#36e2e2","polygonCount":14,"customerCount":1475,"orderCount":4216},{"color":"#367be2","polygonCount":13,"customerCount":1496,"orderCount":3243},{"color":"#5936e2","polygonCount":12,"customerCount":1492,"orderCount":2993},{"color":"#c036e2","polygonCount":12,"customerCount":1492,"orderCount":3727},{"color":"#e2369d","polygonCount":13,"customerCount":1539,"orderCount":3559}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T11:03:02.127Z', '2026-05-08T11:03:09.017Z', '2026-05-08T11:03:02.101Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (103, 1, 'done', 145, 145, '{"iterations":145,"filteredSolutions":50,"bestRho":0.76868320123448,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#367be2","polygonCount":9,"customerCount":1538,"orderCount":3527},{"color":"#c036e2","polygonCount":19,"customerCount":1559,"orderCount":2937},{"color":"#e2369d","polygonCount":22,"customerCount":1374,"orderCount":2614},{"color":"#e23636","polygonCount":17,"customerCount":1513,"orderCount":3672},{"color":"#36e2e2","polygonCount":17,"customerCount":1377,"orderCount":3326},{"color":"#36e27b","polygonCount":12,"customerCount":1557,"orderCount":3929},{"color":"#5936e2","polygonCount":8,"customerCount":1563,"orderCount":4160},{"color":"#e29d36","polygonCount":9,"customerCount":1561,"orderCount":4298},{"color":"#c0e236","polygonCount":13,"customerCount":1492,"orderCount":2845},{"color":"#59e236","polygonCount":13,"customerCount":1466,"orderCount":3692}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T18:50:20.442Z', '2026-05-08T18:50:36.961Z', '2026-05-08T18:50:20.421Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (104, 1, 'done', 138, 138, '{"iterations":138,"filteredSolutions":50,"bestRho":1.5734261042113094,"localSearchMoves":24045,"contiguityVerified":true,"summary":[{"color":"#36e2e2","polygonCount":24,"customerCount":1891,"orderCount":4188},{"color":"#36e27b","polygonCount":21,"customerCount":2163,"orderCount":4725},{"color":"#c0e236","polygonCount":24,"customerCount":2395,"orderCount":4651},{"color":"#367be2","polygonCount":4,"customerCount":332,"orderCount":406},{"color":"#59e236","polygonCount":3,"customerCount":431,"orderCount":707},{"color":"#e23636","polygonCount":23,"customerCount":2599,"orderCount":6920},{"color":"#e29d36","polygonCount":7,"customerCount":1467,"orderCount":4427},{"color":"#c036e2","polygonCount":25,"customerCount":2516,"orderCount":6315},{"color":"#5936e2","polygonCount":6,"customerCount":579,"orderCount":695},{"color":"#e2369d","polygonCount":2,"customerCount":627,"orderCount":1966}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-08T18:58:39.162Z', '2026-05-08T18:59:52.397Z', '2026-05-08T18:58:39.138Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (105, 1, 'done', 105, 105, '{"iterations":105,"filteredSolutions":50,"bestRho":0.2039839930686446,"localSearchMoves":25000,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":27,"customerCount":1481,"orderCount":3202},{"color":"#367be2","polygonCount":14,"customerCount":1532,"orderCount":3262},{"color":"#e2369d","polygonCount":8,"customerCount":1493,"orderCount":3108},{"color":"#36e27b","polygonCount":22,"customerCount":1462,"orderCount":2700},{"color":"#59e236","polygonCount":11,"customerCount":1516,"orderCount":2710},{"color":"#36e2e2","polygonCount":12,"customerCount":1475,"orderCount":4016},{"color":"#c036e2","polygonCount":9,"customerCount":1566,"orderCount":4163},{"color":"#e29d36","polygonCount":18,"customerCount":1507,"orderCount":3469},{"color":"#c0e236","polygonCount":12,"customerCount":1483,"orderCount":4046},{"color":"#5936e2","polygonCount":6,"customerCount":1485,"orderCount":4324}],"message":"Hoan tat BGRASP-I. Tat ca cac vung deu lien thong."}', '2026-05-08T19:16:59.482Z', '2026-05-08T19:17:15.665Z', '2026-05-08T19:16:59.448Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (106, 1, 'done', 146, 146, '{"iterations":146,"filteredSolutions":50,"bestRho":0.02930071202126238,"localSearchMoves":1378,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":2648,"orderCount":6187},{"color":"#e29d36","polygonCount":12,"customerCount":2395,"orderCount":5213},{"color":"#c0e236","polygonCount":11,"customerCount":2486,"orderCount":4842},{"color":"#59e236","polygonCount":9,"customerCount":2483,"orderCount":5718},{"color":"#36e27b","polygonCount":12,"customerCount":2530,"orderCount":5338},{"color":"#36e2e2","polygonCount":18,"customerCount":2510,"orderCount":5500},{"color":"#367be2","polygonCount":16,"customerCount":2418,"orderCount":4927},{"color":"#5936e2","polygonCount":22,"customerCount":2518,"orderCount":5565},{"color":"#c036e2","polygonCount":19,"customerCount":2503,"orderCount":6351},{"color":"#e2369d","polygonCount":9,"customerCount":2509,"orderCount":5359}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-17T16:49:25.642Z', '2026-05-17T16:49:33.123Z', '2026-05-17T16:49:25.563Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (107, 1, 'done', 131, 131, '{"iterations":131,"filteredSolutions":50,"bestRho":0.05162773062666443,"localSearchMoves":2122,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":11,"customerCount":1597,"orderCount":3064},{"color":"#e27b36","polygonCount":13,"customerCount":1492,"orderCount":3677},{"color":"#e2c036","polygonCount":5,"customerCount":1858,"orderCount":4535},{"color":"#c0e236","polygonCount":11,"customerCount":1650,"orderCount":4397},{"color":"#7be236","polygonCount":10,"customerCount":1758,"orderCount":3973},{"color":"#36e236","polygonCount":12,"customerCount":1606,"orderCount":3492},{"color":"#36e27b","polygonCount":8,"customerCount":1701,"orderCount":3071},{"color":"#36e2c0","polygonCount":7,"customerCount":1671,"orderCount":3427},{"color":"#36c0e2","polygonCount":7,"customerCount":1660,"orderCount":2646},{"color":"#367be2","polygonCount":11,"customerCount":1641,"orderCount":3664},{"color":"#3636e2","polygonCount":12,"customerCount":1588,"orderCount":3754},{"color":"#7b36e2","polygonCount":11,"customerCount":1571,"orderCount":3298},{"color":"#c036e2","polygonCount":5,"customerCount":1809,"orderCount":4695},{"color":"#e236c0","polygonCount":7,"customerCount":1752,"orderCount":3333},{"color":"#e2367b","polygonCount":13,"customerCount":1646,"orderCount":3974}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-17T17:03:53.207Z', '2026-05-17T17:04:06.189Z', '2026-05-17T17:03:52.924Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (108, 1, 'done', 140, 140, '{"iterations":140,"filteredSolutions":50,"bestRho":0.08878573772518647,"localSearchMoves":1671,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":7,"customerCount":1206,"orderCount":3429},{"color":"#e26a36","polygonCount":10,"customerCount":1232,"orderCount":2297},{"color":"#e29d36","polygonCount":5,"customerCount":1424,"orderCount":2274},{"color":"#e2d136","polygonCount":6,"customerCount":1062,"orderCount":2478},{"color":"#c0e236","polygonCount":9,"customerCount":1281,"orderCount":3208},{"color":"#8ce236","polygonCount":5,"customerCount":1313,"orderCount":2883},{"color":"#59e236","polygonCount":8,"customerCount":1191,"orderCount":3444},{"color":"#36e247","polygonCount":8,"customerCount":1135,"orderCount":2881},{"color":"#36e27b","polygonCount":8,"customerCount":872,"orderCount":2518},{"color":"#36e2af","polygonCount":4,"customerCount":1550,"orderCount":3689},{"color":"#36e2e2","polygonCount":8,"customerCount":1168,"orderCount":2061},{"color":"#36afe2","polygonCount":2,"customerCount":1481,"orderCount":3101},{"color":"#367be2","polygonCount":6,"customerCount":1368,"orderCount":3104},{"color":"#3647e2","polygonCount":4,"customerCount":1191,"orderCount":3062},{"color":"#5936e2","polygonCount":5,"customerCount":1241,"orderCount":2928},{"color":"#8c36e2","polygonCount":7,"customerCount":1217,"orderCount":2455},{"color":"#c036e2","polygonCount":8,"customerCount":1338,"orderCount":2157},{"color":"#e236d1","polygonCount":8,"customerCount":1251,"orderCount":2262},{"color":"#e2369d","polygonCount":12,"customerCount":1212,"orderCount":2204},{"color":"#e2366a","polygonCount":9,"customerCount":1267,"orderCount":2558}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-17T18:45:47.739Z', '2026-05-17T18:45:53.516Z', '2026-05-17T18:45:47.672Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (109, 1, 'done', 106, 106, '{"iterations":106,"filteredSolutions":50,"bestRho":0.03333167828679667,"localSearchMoves":1599,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":2057,"orderCount":4835},{"color":"#e28636","polygonCount":8,"customerCount":1875,"orderCount":3811},{"color":"#e2d536","polygonCount":13,"customerCount":1895,"orderCount":4339},{"color":"#a0e236","polygonCount":14,"customerCount":1891,"orderCount":4962},{"color":"#51e236","polygonCount":12,"customerCount":1921,"orderCount":4790},{"color":"#36e26b","polygonCount":8,"customerCount":1911,"orderCount":3599},{"color":"#36e2bb","polygonCount":12,"customerCount":1966,"orderCount":5249},{"color":"#36bbe2","polygonCount":11,"customerCount":2034,"orderCount":3625},{"color":"#366be2","polygonCount":10,"customerCount":1927,"orderCount":3974},{"color":"#5136e2","polygonCount":12,"customerCount":1916,"orderCount":3554},{"color":"#a036e2","polygonCount":5,"customerCount":1858,"orderCount":4535},{"color":"#e236d5","polygonCount":7,"customerCount":1823,"orderCount":4710},{"color":"#e23686","polygonCount":12,"customerCount":1926,"orderCount":3010}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-20T09:28:41.025Z', '2026-05-20T09:28:46.492Z', '2026-05-20T09:28:41.003Z');
+INSERT INTO public."optimization_jobs" (id, version_id, status, progress, total, message, started_at, finished_at, created_at) VALUES (110, 1, 'done', 100, 100, '{"iterations":100,"filteredSolutions":50,"bestRho":0.028762408528489353,"localSearchMoves":1384,"contiguityVerified":true,"summary":[{"color":"#e23636","polygonCount":15,"customerCount":2491,"orderCount":6446},{"color":"#e29d36","polygonCount":13,"customerCount":2499,"orderCount":5469},{"color":"#c0e236","polygonCount":16,"customerCount":2506,"orderCount":5087},{"color":"#59e236","polygonCount":14,"customerCount":2460,"orderCount":5577},{"color":"#36e27b","polygonCount":15,"customerCount":2502,"orderCount":5127},{"color":"#36e2e2","polygonCount":14,"customerCount":2641,"orderCount":6580},{"color":"#367be2","polygonCount":5,"customerCount":2353,"orderCount":5023},{"color":"#5936e2","polygonCount":20,"customerCount":2527,"orderCount":5076},{"color":"#c036e2","polygonCount":13,"customerCount":2525,"orderCount":5247},{"color":"#e2369d","polygonCount":14,"customerCount":2496,"orderCount":5361}],"message":"Hoàn tất BGRASP. Tất cả các vùng đều liên thông."}', '2026-05-20T16:50:50.548Z', '2026-05-20T16:50:56.276Z', '2026-05-20T16:50:50.521Z');
+
+--
+-- Sync Sequence values
+--
+
+SELECT pg_catalog.setval('public.regions_id_seq', 1, true);
+SELECT pg_catalog.setval('public.provinces_id_seq', 2, true);
+SELECT pg_catalog.setval('public.versions_id_seq', 5, true);
+SELECT pg_catalog.setval('public.drivers_id_seq', 2, true);
+SELECT pg_catalog.setval('public.users_id_seq', 22, true);
+SELECT pg_catalog.setval('public.basic_units_id_seq', 503, true);
+SELECT pg_catalog.setval('public.optimization_jobs_id_seq', 110, true);
+
+--
+-- Constraints & Indexes
+--
+
+ALTER TABLE ONLY public.regions ADD CONSTRAINT regions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.provinces ADD CONSTRAINT provinces_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.versions ADD CONSTRAINT versions_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.drivers ADD CONSTRAINT drivers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.users ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.users ADD CONSTRAINT users_username_key UNIQUE (username);
+ALTER TABLE ONLY public.users ADD CONSTRAINT users_driver_id_key UNIQUE (driver_id);
+ALTER TABLE ONLY public.basic_units ADD CONSTRAINT basic_units_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.unit_adjacencies ADD CONSTRAINT unit_adjacencies_pkey PRIMARY KEY (unit_a_id, unit_b_id, version_id);
+ALTER TABLE ONLY public.optimization_jobs ADD CONSTRAINT optimization_jobs_pkey PRIMARY KEY (id);
+
+CREATE INDEX idx_basic_units_geom ON public.basic_units USING gist (geom);
+CREATE INDEX idx_basic_units_centroid ON public.basic_units USING gist (centroid);
+
+--
+-- Triggers
+--
+
+CREATE TRIGGER trg_auto_calculate_bu BEFORE INSERT OR UPDATE OF geom ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.fn_auto_calculate_bu();
+CREATE TRIGGER trg_no_overlap BEFORE INSERT OR UPDATE ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.check_no_overlap();
+CREATE TRIGGER trg_update_bu_metadata BEFORE INSERT OR UPDATE OF geom ON public.basic_units FOR EACH ROW EXECUTE FUNCTION public.fn_update_bu_metadata();
+
+--
+-- Foreign Keys
+--
+
+ALTER TABLE ONLY public.provinces ADD CONSTRAINT provinces_region_id_fkey FOREIGN KEY (region_id) REFERENCES public.regions(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.versions ADD CONSTRAINT versions_province_id_fkey FOREIGN KEY (province_id) REFERENCES public.provinces(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.users ADD CONSTRAINT fk_user_driver FOREIGN KEY (driver_id) REFERENCES public.drivers(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.users ADD CONSTRAINT users_province_id_fkey FOREIGN KEY (province_id) REFERENCES public.provinces(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.basic_units ADD CONSTRAINT fk_created_by FOREIGN KEY (created_by) REFERENCES public.users(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.basic_units ADD CONSTRAINT basic_units_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.versions(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.unit_adjacencies ADD CONSTRAINT unit_adjacencies_unit_a_id_fkey FOREIGN KEY (unit_a_id) REFERENCES public.basic_units(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.unit_adjacencies ADD CONSTRAINT unit_adjacencies_unit_b_id_fkey FOREIGN KEY (unit_b_id) REFERENCES public.basic_units(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.unit_adjacencies ADD CONSTRAINT unit_adjacencies_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.versions(id) ON DELETE CASCADE;
+ALTER TABLE ONLY public.optimization_jobs ADD CONSTRAINT optimization_jobs_version_id_fkey FOREIGN KEY (version_id) REFERENCES public.versions(id) ON DELETE CASCADE;

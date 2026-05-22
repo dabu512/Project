@@ -1117,7 +1117,8 @@ window.bulkRandomDistribute = async function () {
     })
     .catch((err) => {
       document.getElementById("loading-screen").style.display = "none";
-      Swal.fire("Lỗi", err.message, "error");
+      console.error('Lỗi khi cập nhật thuộc tính hàng loạt:', err);
+      Swal.fire('Lỗi', 'Có lỗi khi cập nhật. Vui lòng thử lại.', 'error');
     });
 };
 
@@ -1228,7 +1229,8 @@ window.startOptimization = async function () {
     }
   } catch (e) {
     document.getElementById("loading-screen").style.display = "none";
-    Swal.fire("Lỗi", e.message, "error");
+    console.error('Lỗi khởi tạo thuật toán tối ưu:', e);
+    Swal.fire('Lỗi', 'Không thể khởi chạy thuật toán. Vui lòng thử lại.', 'error');
   }
 };
 
@@ -1281,7 +1283,8 @@ window.bulkRandomColors = function () {
       }).then(() => location.reload());
     } catch (err) {
       document.getElementById("loading-screen").style.display = "none";
-      Swal.fire("Lỗi", err.message, "error");
+      console.error('Lỗi khi tô màu hàng loạt:', err);
+      Swal.fire('Lỗi', 'Không thể tô màu. Vui lòng thử lại.', 'error');
     }
   });
 };

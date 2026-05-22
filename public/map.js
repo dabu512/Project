@@ -1260,12 +1260,12 @@ if (currentUser) {
                 }
             })
             .catch(err => {
-                // --- CHỖ NÀY SẼ HIỆN LỖI CHI TIẾT ---
-                console.error("Lỗi chi tiết:", err.message);
+                // --- Hiển thị thông báo an toàn cho người dùng, log chi tiết vào console ---
+                console.error("Lỗi tải bản đồ:", err);
                 Swal.fire({
                     icon: 'error',
                     title: 'Lỗi tải bản đồ',
-                    text: err.message // Hiện thẳng lỗi ra để biết đường sửa
+                    text: 'Có lỗi khi tải dữ liệu bản đồ. Vui lòng thử lại hoặc kiểm tra console để biết thêm chi tiết.'
                 });
             });
 
@@ -1299,7 +1299,8 @@ if (currentUser) {
                     }
                 }).catch(err => {
                     document.getElementById('loading-screen').style.display = 'none';
-                    Swal.fire('Lỗi', err.message, 'error');
+                    console.error('Lỗi khi cắt đa giác (split):', err);
+                    Swal.fire('Lỗi', 'Không thể cắt đa giác. Vui lòng thử lại.', 'error');
                     layer.remove();
                 });
                 return; // Ngừng logic của 'Polygon' (vẽ thêm ô)
@@ -1330,7 +1331,8 @@ if (currentUser) {
                 }
             } catch (err) {
                 document.getElementById('loading-screen').style.display = 'none';
-                console.error("Lỗi:", err);
+                console.error("Lỗi khi kiểm tra chồng lấn:", err);
+                Swal.fire('Lỗi', 'Không thể kiểm tra chồng lấn. Vui lòng thử lại.', 'error');
                 return;
             }
 
@@ -1341,8 +1343,8 @@ if (currentUser) {
         // ĐÓNG NGOẶC HÀM loadMapData (Được thêm bởi thay đổi trước đó)
     };
 
-    if (currentUser.role !== 'admin') {
-        // Render map for driver - currently just loading all units as districts are gone
+    if (!currentUser || currentUser.role !== 'admin') {
+        // Render map for driver (or unauthenticated) - load public data
         window.loadMapData();
     }
 }

@@ -90,9 +90,8 @@ router.post("/", async (req, res) => {
     }
 
     const query = `
-            INSERT INTO basic_units (name, geom, centroid, customer_count, order_count, color, area_km2, version_id)
-            VALUES ($1, ST_SetSRID(ST_GeomFromGeoJSON($2), 4326), ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($2), 4326)), $3, $4, $5,
-                    ST_Area(ST_SetSRID(ST_GeomFromGeoJSON($2), 4326)::geography) / 1000000, $6) 
+            INSERT INTO basic_units (name, geom, customer_count, order_count, color, version_id)
+            VALUES ($1, ST_SetSRID(ST_GeomFromGeoJSON($2), 4326), $3, $4, $5, $6) 
             RETURNING id;
         `;
     const result = await pool.query(query, [
@@ -412,9 +411,7 @@ router.put("/:id", async (req, res) => {
       // Trường hợp chỉ kéo thả ranh giới trên bản đồ
       await pool.query(
         `UPDATE basic_units 
-                 SET geom = ST_SetSRID(ST_GeomFromGeoJSON($1), 4326),
-                     centroid = ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)),
-                     area_km2 = ST_Area(ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)::geography) / 1000000
+                 SET geom = ST_SetSRID(ST_GeomFromGeoJSON($1), 4326)
                  WHERE id = $2`,
         [JSON.stringify(geometry), id],
       );
@@ -423,9 +420,7 @@ router.put("/:id", async (req, res) => {
       await pool.query(
         `UPDATE basic_units 
                  SET name = $1, customer_count = $2, order_count = $3, color = $4,
-                     geom = ST_SetSRID(ST_GeomFromGeoJSON($5), 4326),
-                     centroid = ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($5), 4326)),
-                     area_km2 = ST_Area(ST_SetSRID(ST_GeomFromGeoJSON($5), 4326)::geography) / 1000000
+                     geom = ST_SetSRID(ST_GeomFromGeoJSON($5), 4326)
                  WHERE id = $6`,
         [
           name,
@@ -517,13 +512,14 @@ router.post("/build-adjacencies", async (req, res) => {
             FROM basic_units a
             JOIN basic_units b ON a.id < b.id AND a.version_id = b.version_id
             WHERE a.version_id = $1 
-              -- Bước 1: Tìm các ô cách nhau dưới 50cm
-              AND ST_DWithin(a.geom::geography, b.geom::geography, 0.5)
-              -- Bước 2: Buffer mỗi ô ra 10cm rồi đo diện tích giao nhau:
-              -- Chạm đỉnh (chéo góc): diện tích giao ~0.01m2 → bị loại
-              -- Chung cạnh (cạnh 25cm+): diện tích giao ≥ 0.1m2 → được giữ
+              -- Tìm các ô phẳng dưới 50cm bằng ST_Transform sang EPSG:3857
+              AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+              -- Buffer phẳng mét cực nhanh:
               AND ST_Area(
-                  ST_Intersection(ST_Buffer(a.geom::geography, 0.1)::geometry, ST_Buffer(b.geom::geography, 0.1)::geometry)::geography
+                  ST_Intersection(
+                      ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                      ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+                  )
               ) > 0.1
         `;
 

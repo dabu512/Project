@@ -77,7 +77,7 @@ window.loadVersions = async function () {
 
   const versionSelect = document.getElementById("version-select");
 
-  versionSelect.innerHTML = '<option value="">-- Chọn Bản đồ --</option>';
+  versionSelect.innerHTML = '<option value="">-- Chọn Phiên bản --</option>';
   versionSelect.disabled = true;
   document.getElementById("btn-create-version").disabled = true;
   document.getElementById("btn-apply-version").style.display = "none";

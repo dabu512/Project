@@ -1024,19 +1024,17 @@ window.startOptimization = async function () {
               document.getElementById("opt-msg").innerText = job.message;
               if (job.status === "done") {
                 clearInterval(progressInterval);
+                window._isComparingOptions = false;
 
-                // Cập nhật và hiển thị bảng thông số vùng mới
-                window.updateStatsPanel().then(() => {
-                  Swal.fire({
-                    icon: "success",
-                    title: "Thành công",
-                    text: "Phân chia vùng hoàn tất. Đang tải lại dữ liệu...",
-                    timer: 2000,
-                    showConfirmButton: false,
-                  }).then(() => {
-                    location.reload();
-                  });
-                });
+                try {
+                  const resultObj = JSON.parse(job.message);
+                  window.currentOptimOptions = resultObj.options;
+                  window.currentJobId = data.jobId;
+                  window.showOptimizationOptions(0);
+                } catch (err) {
+                  console.error("Lỗi parse kết quả tối ưu:", err);
+                  Swal.fire("Lỗi", "Không thể phân tích dữ liệu kết quả từ server.", "error");
+                }
               } else if (job.status === "error") {
                 clearInterval(progressInterval);
                 Swal.fire("Lỗi", job.message, "error");
@@ -1047,13 +1045,305 @@ window.startOptimization = async function () {
       });
     } else {
       document.getElementById("loading-screen").style.display = "none";
-      Swal.fire("Lỗi", data.message, "error");
+      if (data.message && (data.message.includes("đang được tối ưu hóa") || data.message.includes("bị khoá"))) {
+        Swal.fire({
+          title: "Phiên bản đang bị khoá",
+          text: "Tiến trình trước đó có thể đã bị gián đoạn (do mất kết nối hoặc đóng trang). Bạn có muốn bỏ khoá để tiếp tục không?",
+          icon: "warning",
+          showCancelButton: true,
+          confirmButtonText: "Bỏ khoá & Thử lại",
+          cancelButtonText: "Đóng"
+        }).then(async (result) => {
+          if (result.isConfirmed) {
+            try {
+              const unlockRes = await fetch("/api/optimization/unlock", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ version_id: window.currentVersionId })
+              });
+              const unlockData = await unlockRes.json();
+              if (unlockData.success) {
+                Swal.fire("Thành công", "Đã bỏ khoá! Vui lòng bấm 'Phân chia vùng' lại.", "success");
+              } else {
+                Swal.fire("Lỗi", unlockData.message, "error");
+              }
+            } catch (e) {
+              Swal.fire("Lỗi", "Không thể bỏ khoá: " + e.message, "error");
+            }
+          }
+        });
+      } else {
+        Swal.fire("Lỗi", data.message, "error");
+      }
     }
   } catch (e) {
     document.getElementById("loading-screen").style.display = "none";
     Swal.fire("Lỗi", e.message, "error");
   }
 };
+
+// --- BGRASP Multi-Option Preview & Apply Helpers ---
+window.originalMapColors = {};
+
+window.previewOption = function (assignments) {
+  if (!window.geoJsonLayer) return;
+  
+  // Cache original colors if not cached yet
+  if (!window.originalMapColors || Object.keys(window.originalMapColors).length === 0) {
+    window.originalMapColors = {};
+    window.geoJsonLayer.eachLayer(l => {
+      const uid = String(l.options.id);
+      window.originalMapColors[uid] = l.options.fillColor || '#ccc';
+    });
+  }
+
+  window.geoJsonLayer.eachLayer(l => {
+    const uid = String(l.options.id);
+    if (assignments && assignments[uid]) {
+      const color = assignments[uid];
+      l.setStyle({
+        fillColor: color,
+        color: "#1e1b4b", // premium dark border
+        weight: 2.5,      // slightly thicker for preview
+        fillOpacity: 0.7  // higher contrast
+      });
+    }
+  });
+};
+
+window.revertMapPreview = function () {
+  if (!window.geoJsonLayer || !window.originalMapColors || Object.keys(window.originalMapColors).length === 0) return;
+  window.geoJsonLayer.eachLayer(l => {
+    const uid = String(l.options.id);
+    const origColor = window.originalMapColors[uid] || '#ccc';
+    l.setStyle({
+      fillColor: origColor,
+      color: "#333",
+      weight: 2,
+      fillOpacity: 0.5
+    });
+  });
+};
+
+window.applyOption = async function (jobId, optionIndex) {
+  document.getElementById("loading-screen").style.display = "flex";
+  try {
+    const res = await fetch("/api/optimization/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, optionIndex })
+    });
+    const data = await res.json();
+    document.getElementById("loading-screen").style.display = "none";
+    if (data.success) {
+      window.originalMapColors = {}; // Clear cache
+      Swal.fire({
+        icon: "success",
+        title: "Đã áp dụng!",
+        text: data.message,
+        timer: 1500,
+        showConfirmButton: false
+      }).then(() => {
+        location.reload();
+      });
+    } else {
+      Swal.fire("Lỗi", data.message, "error");
+    }
+  } catch (err) {
+    document.getElementById("loading-screen").style.display = "none";
+    Swal.fire("Lỗi", err.message, "error");
+  }
+};
+
+window.discardOptimization = async function (jobId) {
+  window.revertMapPreview();
+  window.originalMapColors = {}; // Clear cache
+  
+  try {
+    await fetch("/api/optimization/discard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId })
+    });
+  } catch (err) {
+    console.error("Lỗi khi hủy bỏ tối ưu:", err.message);
+  }
+};
+
+window.showOptimizationOptions = function (idx) {
+  const options = window.currentOptimOptions;
+  const jobId = window.currentJobId;
+  const opt = options[idx];
+  
+  // Trực quan hóa xem thử ngay lập tức trên bản đồ
+  window.previewOption(opt.assignments);
+  
+  // Tạo thanh tab các phương án
+  let tabsHtml = `
+    <div style="display: flex; gap: 8px; justify-content: space-between; border-bottom: 2px solid #f1f5f9; margin-bottom: 18px; padding-bottom: 8px;">
+  `;
+  options.forEach((o, i) => {
+    const isActive = i === idx;
+    const activeStyle = isActive 
+      ? 'background: linear-gradient(135deg, #8b5cf6, #6d28d9); color: white; box-shadow: 0 4px 10px rgba(139, 92, 246, 0.3); font-weight: bold;' 
+      : 'background-color: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; cursor: pointer;';
+    const icons = ['fa-shapes', 'fa-scale-balanced', 'fa-users'];
+    tabsHtml += `
+      <button onclick="window.showOptimizationOptions(${i})" style="flex: 1; padding: 10px 8px; font-size: 13px; border-radius: 8px; transition: all 0.2s; border: none; outline: none; ${activeStyle}">
+        <i class="fa-solid ${icons[i]}" style="margin-right: 5px;"></i> PA ${i+1}
+      </button>
+    `;
+  });
+  tabsHtml += `</div>`;
+  
+  // Bảng phân tích chi tiết vùng
+  let zonesTableHtml = `
+    <div style="max-height: 180px; overflow-y: auto; margin-top: 12px; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);">
+      <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; font-family: inherit;">
+        <thead style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0; position: sticky; top: 0; z-index: 1;">
+          <tr>
+            <th style="padding: 10px; font-weight: 600; color: #475569;">Vùng</th>
+            <th style="padding: 10px; text-align: center; font-weight: 600; color: #475569;">Số ô đa giác</th>
+            <th style="padding: 10px; text-align: center; font-weight: 600; color: #475569;">Khách hàng</th>
+            <th style="padding: 10px; text-align: center; font-weight: 600; color: #475569;">Đơn hàng</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+  
+  opt.summary.forEach((zone, zIdx) => {
+    zonesTableHtml += `
+      <tr style="border-bottom: 1px solid #f1f5f9; transition: background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+        <td style="padding: 8px 10px; display: flex; align-items: center; font-weight: 500;">
+          <span style="display: inline-block; width: 12px; height: 12px; background-color: ${zone.color}; border-radius: 50%; margin-right: 8px; border: 1px solid rgba(0,0,0,0.15);"></span>
+          Vùng ${zIdx + 1}
+        </td>
+        <td style="padding: 8px 10px; text-align: center; color: #64748b;">${zone.polygonCount}</td>
+        <td style="padding: 8px 10px; text-align: center; font-weight: 600; color: #1e293b;">${zone.customerCount}</td>
+        <td style="padding: 8px 10px; text-align: center; color: #64748b;">${zone.orderCount}</td>
+      </tr>
+    `;
+  });
+  zonesTableHtml += `
+        </tbody>
+      </table>
+    </div>
+  `;
+  
+  // Định cấu hình chỉ số tải trọng và độ gọn
+  const cvVal = opt.metrics.cv || 0;
+  const maxDevVal = opt.metrics.maxDevPercent || 0;
+  const cvColor = cvVal < 10 ? '#10b981' : (cvVal < 20 ? '#f59e0b' : '#ef4444');
+  const compactnessRating = idx === 0 ? 'Tối đa (Hình gọn/tròn)' : (idx === 1 ? 'Cân bằng' : 'Thấp (Hơi kéo dài)');
+  const compactnessColor = idx === 0 ? '#10b981' : (idx === 1 ? '#6366f1' : '#f59e0b');
+
+  const contentHtml = `
+    ${tabsHtml}
+    <div style="text-align: left; font-family: 'Outfit', 'Inter', sans-serif;">
+      <div style="background: #faf5ff; border-left: 4px solid #8b5cf6; padding: 10px 12px; border-radius: 0 8px 8px 0; margin-bottom: 15px;">
+        <h4 style="font-size: 15px; font-weight: 700; color: #5b21b6; margin: 0 0 4px 0;">${opt.name}</h4>
+        <p style="font-size: 12.5px; color: #6d28d9; margin: 0; line-height: 1.4;">${opt.description}</p>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+        <div style="background-color: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #f1f5f9; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Hình học vùng</div>
+          <div style="font-size: 13.5px; font-weight: 700; color: ${compactnessColor}; margin-top: 4px;">
+            <i class="fa-solid fa-compass-drafting" style="margin-right: 4px;"></i> ${compactnessRating}
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #f1f5f9; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Độ lệch tải trọng (CV)</div>
+          <div style="font-size: 13.5px; font-weight: 700; color: ${cvColor}; margin-top: 4px;">
+            <i class="fa-solid fa-chart-line" style="margin-right: 4px;"></i> ${cvVal.toFixed(1)}% (±${maxDevVal.toFixed(1)}%)
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #f1f5f9; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Phạm vi khách hàng</div>
+          <div style="font-size: 13.5px; font-weight: 700; color: #334155; margin-top: 4px;">
+            <i class="fa-solid fa-users" style="margin-right: 4px;"></i> ${opt.metrics.minZoneCust} - ${opt.metrics.maxZoneCust} khách
+          </div>
+        </div>
+        <div style="background-color: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #f1f5f9; display: flex; flex-direction: column; justify-content: center;">
+          <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; font-weight: bold; letter-spacing: 0.5px;">Tính liên thông</div>
+          <div style="font-size: 13.5px; font-weight: 700; color: #10b981; margin-top: 4px;">
+            <i class="fa-solid fa-circle-check" style="margin-right: 4px;"></i> 100% Liên thông
+          </div>
+        </div>
+      </div>
+
+      <div style="font-size: 13px; font-weight: 700; color: #334155; margin-top: 12px; margin-bottom: 4px; display: flex; align-items: center;">
+        <i class="fa-solid fa-table-list" style="margin-right: 6px; color: #64748b;"></i> Bảng chỉ số chi tiết các vùng:
+      </div>
+      ${zonesTableHtml}
+    </div>
+  `;
+
+  if (Swal.isVisible() && window._isComparingOptions) {
+    const contentEl = Swal.getHtmlContainer();
+    if (contentEl) {
+      contentEl.innerHTML = contentHtml;
+    }
+    const confirmBtn = Swal.getConfirmButton();
+    if (confirmBtn) {
+      confirmBtn.onclick = () => window.applyOption(jobId, idx);
+    }
+  } else {
+    Swal.fire({
+      title: `<span style="font-size: 19px; font-weight: 800; color: #1e293b; font-family: 'Outfit', sans-serif;"><i class="fa-solid fa-map-location-dot" style="color:#8b5cf6; margin-right:8px;"></i>Các Phương án</span>`,
+      html: contentHtml,
+      width: '420px',
+      showCancelButton: true,
+      confirmButtonText: '<i class="fa-solid fa-circle-check" style="margin-right: 5px;"></i> Áp dụng',
+      cancelButtonText: '<i class="fa-solid fa-circle-xmark" style="margin-right: 5px;"></i> Hủy bỏ',
+      confirmButtonColor: '#10b981',
+      cancelButtonColor: '#ef4444',
+      allowOutsideClick: false,
+      backdrop: false, // Allows user to interact with the map underneath
+      position: 'center-end', // Places the popup on the right side of the screen
+      customClass: {
+        popup: 'floating-options-panel',
+        container: 'options-container-no-pointer' // SweetAlert containers capture pointer events, we can fix it if needed
+      },
+      didOpen: () => {
+        window._isComparingOptions = true;
+        const confirmBtn = Swal.getConfirmButton();
+        if (confirmBtn) {
+          confirmBtn.onclick = () => window.applyOption(jobId, idx);
+        }
+        // Force map interaction (SweetAlert2 container blocks pointer-events by default when backdrop is false but it might block the map)
+        const container = document.querySelector('.swal2-container');
+        if (container) {
+           container.style.pointerEvents = 'none';
+        }
+        const popup = document.querySelector('.swal2-popup');
+        if (popup) {
+           popup.style.pointerEvents = 'auto'; // allow clicking inside the popup
+           // Also add some margin so it's not sticking strictly to the edge
+           popup.style.marginRight = '20px';
+           popup.style.boxShadow = '0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.2)';
+        }
+      },
+      willClose: () => {
+        const container = document.querySelector('.swal2-container');
+        if (container) {
+           container.style.pointerEvents = '';
+        }
+        const popup = document.querySelector('.swal2-popup');
+        if (popup) {
+           popup.style.pointerEvents = '';
+           popup.style.marginRight = '';
+           popup.style.boxShadow = '';
+        }
+      }
+    }).then((res) => {
+      if (res.dismiss) {
+        window.discardOptimization(jobId);
+      }
+    });
+  }
+};
+
 
 /** Tô màu ngẫu nhiên cho các ô đã chọn */
 window.bulkRandomColors = function () {

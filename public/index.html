@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@latest/dist/leaflet-geoman.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
-  <link rel="stylesheet" href="style.css?v=1.2.2" />
+  <link rel="stylesheet" href="style.css?v=1.2.3" />
 </head>
 
 <body>
@@ -41,31 +41,43 @@
           <select id="region-select" class="swal2-input" style="display: none" onchange="loadProvinces()">
             <option value="">-- Chọn Khu vực --</option>
           </select>
+          <div style="font-size: 12px; font-weight: 700; color: #555; margin-top: 4px; display: flex; align-items: center; gap: 5px;">
+            <i class="fa-solid fa-map-location-dot"></i> Tỉnh / Thành phố:
+          </div>
           <select id="province-select" class="swal2-input" style="
-                height: 35px;
+                height: 40px;
                 width: 100%;
                 font-size: 14px;
                 margin: 0;
                 padding: 0 10px;
+                border: 1px solid #ccc;
+                border-radius: 4px;
               " onchange="loadVersions()" disabled>
             <option value="">-- Chọn Tỉnh --</option>
           </select>
+
+          <div style="font-size: 12px; font-weight: 700; color: #555; margin-top: 6px; display: flex; align-items: center; gap: 5px;">
+            <i class="fa-solid fa-code-branch"></i> Phiên bản bản đồ:
+          </div>
           <div style="display: flex; gap: 5px">
             <select id="version-select" class="swal2-input" style="
-                  height: 35px;
+                  height: 40px;
                   flex: 1;
                   font-size: 14px;
+                  font-weight: 600;
                   margin: 0;
                   padding: 0 10px;
+                  border: 1px solid #ccc;
+                  border-radius: 4px;
                 " onchange="onVersionChange()" disabled>
-              <option value="">-- Chọn Bản đồ --</option>
+              <option value="">-- Chọn Phiên bản --</option>
             </select>
             <button id="btn-create-version" class="btn-blue" onclick="createNewVersion()" disabled
-              title="Tạo Version mới">
+              title="Tạo Version mới" style="height: 40px; width: 40px; display: flex; align-items: center; justify-content: center; padding: 0;">
               <i class="fa-solid fa-plus"></i>
             </button>
             <button id="btn-delete-version" class="btn-red" onclick="deleteCurrentVersion()" disabled
-              title="Xóa Version này" style="width: auto; padding: 0 10px">
+              title="Xóa Version này" style="width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center;">
               <i class="fa-solid fa-trash"></i>
             </button>
           </div>

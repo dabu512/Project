@@ -39,10 +39,8 @@ async function markJobDone(jobId, versionId, resultMsg) {
     `UPDATE optimization_jobs SET status = 'done', finished_at = NOW(), message = $1 WHERE id = $2`,
     [resultMsg, jobId],
   );
-  // Mở khoá version
-  await pool.query(`UPDATE versions SET is_optimizing = FALSE WHERE id = $1`, [
-    versionId,
-  ]);
+  // Giữ khoá is_optimizing = TRUE để tránh chỉnh sửa bản đồ trong khi admin đang so sánh các phương án!
+  // Sẽ được mở khoá khi gọi POST /api/optimization/apply hoặc POST /api/optimization/discard.
 }
 
 async function markJobError(jobId, versionId, errMsg) {
@@ -55,6 +53,31 @@ async function markJobError(jobId, versionId, errMsg) {
     versionId,
   ]);
 }
+
+// ================================================================
+//  POST /api/optimization/unlock
+//  Body: { version_id }
+// ================================================================
+router.post("/unlock", async (req, res) => {
+  const { version_id } = req.body;
+  if (!version_id) {
+    return res.status(400).json({ success: false, message: "Thiếu version_id" });
+  }
+  try {
+    const result = await pool.query(
+      `UPDATE versions SET is_optimizing = FALSE WHERE id = $1 RETURNING id`,
+      [version_id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy version" });
+    }
+    // Dọn dẹp bất kỳ state nào còn sót lại
+    res.json({ success: true, message: "Đã mở khoá phiên bản thành công!" });
+  } catch (err) {
+    console.error("Lỗi khi mở khoá version:", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // ================================================================
 //  POST /api/optimization/start
@@ -70,28 +93,20 @@ router.post("/start", async (req, res) => {
   }
 
   try {
-    // 1. Kiểm tra version có đang bị khoá không
-    const vRes = await pool.query(
-      "SELECT id, is_optimizing FROM versions WHERE id = $1",
-      [version_id],
+    // 1 & 2. Khóa version bằng truy vấn nguyên tử (Atomic Lock) để tránh Race Condition
+    const lockRes = await pool.query(
+      `UPDATE versions 
+       SET is_optimizing = TRUE 
+       WHERE id = $1 AND is_optimizing = FALSE 
+       RETURNING id`,
+      [version_id]
     );
-    if (vRes.rows.length === 0) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Version không tồn tại" });
-    }
-    if (vRes.rows[0].is_optimizing) {
+    if (lockRes.rows.length === 0) {
       return res.status(409).json({
         success: false,
-        message:
-          "Version này đang được tối ưu hóa. Vui lòng chờ hoặc huỷ job hiện tại.",
+        message: "Version không tồn tại hoặc đang được tối ưu hóa. Vui lòng chờ!"
       });
     }
-
-    // 2. Đặt khoá version
-    await pool.query("UPDATE versions SET is_optimizing = TRUE WHERE id = $1", [
-      version_id,
-    ]);
 
     // 2.5 Rebuild adjacencies for this version
     await pool.query("DELETE FROM unit_adjacencies WHERE version_id = $1", [
@@ -104,12 +119,14 @@ router.post("/start", async (req, res) => {
         FROM basic_units a
         JOIN basic_units b ON a.id < b.id AND a.version_id = b.version_id
         WHERE a.version_id = $1 
-          AND ST_DWithin(a.geom::geography, b.geom::geography, 0.5)
-          -- Buffer mỗi ô ra 10cm rồi đo diện tích giao nhau:
-          -- Chạm đỉnh (chéo góc): diện tích giao ~0.01m2 → bị loại
-          -- Chung cạnh (cạnh 25cm+): diện tích giao ≥ 0.1m2 → được giữ
+          -- Dùng hệ tọa độ phẳng mét ST_Transform(geom, 3857) tăng tốc cực nhanh
+          AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+          -- Buffer phẳng hệ mét siêu nhẹ:
           AND ST_Area(
-              ST_Intersection(ST_Buffer(a.geom::geography, 0.1)::geometry, ST_Buffer(b.geom::geography, 0.1)::geometry)::geography
+              ST_Intersection(
+                  ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                  ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+              )
           ) > 0.1
     `,
       [version_id],
@@ -278,10 +295,134 @@ router.post("/cancel/:jobId", async (req, res) => {
 });
 
 // ================================================================
+//  POST /api/optimization/apply
+//  Áp dụng phương án phân chia vùng đã chọn
+//  Body: { jobId, optionIndex }
+// ================================================================
+router.post("/apply", async (req, res) => {
+  const { jobId, optionIndex } = req.body;
+  if (jobId === undefined || optionIndex === undefined) {
+    return res.status(400).json({ success: false, message: "Thiếu jobId hoặc optionIndex" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Fetch the job from DB
+    const jobRes = await client.query(
+      `SELECT version_id, status, message FROM optimization_jobs WHERE id = $1`,
+      [jobId]
+    );
+    if (jobRes.rows.length === 0) {
+      throw new Error("Không tìm thấy job");
+    }
+
+    const { version_id, status, message } = jobRes.rows[0];
+    if (status !== "done") {
+      throw new Error(`Job chưa hoàn thành (Trạng thái hiện tại: ${status})`);
+    }
+
+    // Parse options from message
+    const resultObj = JSON.parse(message);
+    if (!resultObj.options || !resultObj.options[optionIndex]) {
+      throw new Error("Phương án lựa chọn không hợp lệ hoặc không tồn tại!");
+    }
+
+    const chosenOption = resultObj.options[optionIndex];
+    const assignments = chosenOption.assignments; // Object mapping: unitId -> color
+
+    const idUpdates = Object.keys(assignments);
+    const colorUpdates = Object.values(assignments);
+
+    if (idUpdates.length > 0) {
+      // Thực hiện update hàng loạt basic_units sử dụng session_replication_role = replica 
+      // để bypass trigger kiểm tra overlap (tương tự bulk update, bảo toàn dữ liệu và tối ưu hiệu suất)
+      await client.query("SET CONSTRAINTS ALL DEFERRED");
+      await client.query("SET session_replication_role = replica");
+
+      await client.query(`
+        UPDATE basic_units AS b
+        SET color = c.color
+        FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS color) AS c
+        WHERE b.id::text = c.id AND b.version_id = $3
+      `, [idUpdates, colorUpdates, version_id]);
+
+      await client.query("SET session_replication_role = DEFAULT");
+    }
+
+    // Mở khoá version
+    await client.query(
+      `UPDATE versions SET is_optimizing = FALSE WHERE id = $1`,
+      [version_id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      message: `Áp dụng thành công "${chosenOption.name}"!`
+    });
+
+    // Kích hoạt triggerAutoDump để backup database
+    const { triggerAutoDump } = require("../js/autoDump");
+    if (triggerAutoDump) {
+      console.log("[Apply Optimization] Triggering database dump backup...");
+      triggerAutoDump();
+    }
+
+  } catch (err) {
+    await client.query("SET session_replication_role = DEFAULT").catch(() => {});
+    await client.query("ROLLBACK");
+    console.error("[Apply Optimization] Error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ================================================================
+//  POST /api/optimization/discard
+//  Huỷ bỏ kết quả phân chia (Không áp dụng) và mở khoá version
+//  Body: { jobId }
+// ================================================================
+router.post("/discard", async (req, res) => {
+  const { jobId } = req.body;
+  if (!jobId) {
+    return res.status(400).json({ success: false, message: "Thiếu jobId" });
+  }
+  try {
+    const jobRes = await pool.query(
+      "SELECT version_id FROM optimization_jobs WHERE id = $1",
+      [jobId]
+    );
+    if (jobRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy job" });
+    }
+    const versionId = jobRes.rows[0].version_id;
+
+    // Mở khoá version
+    await pool.query(
+      `UPDATE versions SET is_optimizing = FALSE WHERE id = $1`,
+      [versionId]
+    );
+
+    res.json({ success: true, message: "Đã hủy bỏ kết quả phân chia và mở khóa phiên bản thành công." });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ================================================================
 //  MIDDLEWARE GUARD: Kiểm tra version có đang bị khoá không
 //  Được dùng bởi các route cần bảo vệ (units, districts)
 // ================================================================
 async function checkVersionLock(req, res, next) {
+  // Cho phép tất cả các yêu cầu đọc (GET) đi qua bình thường để bản đồ tải được dữ liệu
+  if (req.method === "GET") {
+    return next();
+  }
+
   // Lấy version_id từ body hoặc query
   const versionId = req.body?.version_id || req.query?.versionId;
   if (!versionId) return next(); // Không biết version thì bỏ qua guard

@@ -5,11 +5,13 @@ const hierarchyRoutes = require("../routes/hierarchy");
 const unitRoutes = require("../routes/units");
 const driverRoutes = require("../routes/driver");
 const optimizationRoutes = require("../routes/optimization");
+const autoDumpMiddleware = require("./autoDump");
 
 const path = require("path");
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(autoDumpMiddleware);
 app.use(express.static(path.join(__dirname, "../public"), {
   setHeaders: function (res, path, stat) {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');

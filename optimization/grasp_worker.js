@@ -78,7 +78,7 @@ function getBorderCandidates(territoryUnits, adjList, assigned) {
 // ================================================================
 //  THUẬT TOÁN BGRASP CHÍNH
 // ================================================================
-async function runGRASP(versionId, config) {
+async function runGRASP(versionId, config, lambdaParam = 0.70) {
   const MAX_ITER = config.maxIterations || 200;
   const p = config.numRegions || 5;
   const alpha = config.alpha || 0.05;
@@ -88,13 +88,12 @@ async function runGRASP(versionId, config) {
   // --- FETCH DATA ---
   let unitsRes;
   if (config.selectedIds && config.selectedIds.length > 0) {
-    const ids = config.selectedIds.join(",");
     unitsRes = await pool.query(
       `SELECT id, customer_count, order_count, area_km2,
               ST_X(centroid) as cx, ST_Y(centroid) as cy
        FROM basic_units
-       WHERE version_id = $1 AND geom IS NOT NULL AND id IN (${ids})`,
-      [versionId],
+       WHERE version_id = $1 AND geom IS NOT NULL AND id = ANY($2::int[])`,
+      [versionId, config.selectedIds],
     );
   } else {
     unitsRes = await pool.query(
@@ -178,18 +177,27 @@ async function runGRASP(versionId, config) {
   // d_max theo paper: ((|V| - p) / p) * max{d_ij}
   const d_max = ((units.length - p) / p) * globalMaxDist;
 
+  // Ma trận khoảng cách lưu sẵn cực nhanh (N x N)
+  const distMatrix = {};
+  units.forEach((u1) => {
+    distMatrix[u1.id] = {};
+    units.forEach((u2) => {
+      distMatrix[u1.id][u2.id] = haversine(u1.cy, u1.cx, u2.cy, u2.cx);
+    });
+  });
+
   const getDist = (id1, id2) => {
     if (id1 === id2) return 0;
-    const u1 = unitMap[id1], u2 = unitMap[id2];
-    return haversine(u1.cy, u1.cx, u2.cy, u2.cx);
+    return distMatrix[id1]?.[id2] ?? 0;
   };
   const getDistToCenter = (uid, center) => {
     return haversine(unitMap[uid].cy, unitMap[uid].cx, center.cy, center.cx);
   };
-  // Dùng bình phương khoảng cách (MSE) để phạt nặng các ô nằm xa tâm, ép hình dáng vùng phải tròn và gọn.
+  // Hệ tọa độ phẳng mét phẳng dãn 2D thay thế Haversine siêu tốc
   const getDistToCenterSq = (uid, center) => {
-    const d = haversine(unitMap[uid].cy, unitMap[uid].cx, center.cy, center.cx);
-    return d * d;
+    const dy = unitMap[uid].cy - center.cy;
+    const dx = (unitMap[uid].cx - center.cx) * 0.93; // cos(Hanoi latitude 21) ~ 0.93
+    return (dy * dy + dx * dx) * 12387.69; // km^2
   };
 
   // Center: Thay vì dùng Medoid (độ phức tạp O(N^2) gây cực kỳ chậm ở Local Search),
@@ -210,8 +218,8 @@ async function runGRASP(versionId, config) {
   const allSolutions = [];
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
-    // Đã thay đổi hệ số cân bằng cố định là 0.5 theo yêu cầu
-    const lambda = 0.7;
+    // Sử dụng lambdaParam truyền vào
+    const lambda = lambdaParam;
 
     // 1a. Chọn seeds (ngẫu nhiên từ top-degree, rải đều)
     let sortedByDegree = [...units].sort(
@@ -265,7 +273,10 @@ async function runGRASP(versionId, config) {
 
         const t = territories[idx];
 
-        // Score mỗi candidate: lambda * phân_tán (MSE) + (1-lambda) * độ_lệch_cân_bằng
+        // Tạo tSet dạng Set để tra cứu lân cận O(1)
+        const tSet = new Set(t.units);
+
+        // Score mỗi candidate: lambda * phân_tán (MSE) + (1-lambda) * độ_lệch_cân_bằng - beta * nestedness
         let scored = [];
         let scoreMin = Infinity, scoreMax = -Infinity;
 
@@ -273,12 +284,23 @@ async function runGRASP(versionId, config) {
           const u = unitMap[cid];
           let distSq = getDistToCenterSq(cid, t.center);
           let newCust = t.customers + u.customer_count;
-          // Chuẩn hoá f_disp và f_dev về cùng một thang đo (tương đối [0, 1])
-          // Lấy căn bậc 2 của distSq / d_max^2 để khoảng cách tuyến tính hơn, tăng độ nhạy
-          let f_disp = globalMaxDist > 0 ? Math.sqrt(distSq) / globalMaxDist : 0;
+          
+          // 1. Phạt khoảng cách Bình Phương (Quadratic Penalty) thay vì Tuyến Tính (Linear)
+          // giúp các ô lân cận nằm xa tâm bị phạt cực nặng, cưỡng ép hình dạng vùng phải bo tròn
+          let f_disp = globalMaxDist > 0 ? distSq / (globalMaxDist * globalMaxDist) : 0;
           let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
 
-          let score = lambda * f_disp + (1 - lambda) * f_dev;
+          // 2. Điểm thưởng lân cận biên giới (Nestedness Bonus)
+          // Ưu tiên các ô được "ôm" bởi nhiều ô đã có trong Vùng để tăng tối đa độ chặt chẽ (compactness)
+          let sharedNeighbors = 0;
+          for (const nb of adjList[cid]) {
+            if (tSet.has(nb)) sharedNeighbors++;
+          }
+          let totalNeighbors = adjList[cid].size || 1;
+          let nestedness = sharedNeighbors / totalNeighbors; // tỉ lệ [0, 1]
+
+          // Trừ đi điểm thưởng nestedness (beta = 0.25)
+          let score = lambda * f_disp + (1 - lambda) * f_dev - 0.25 * nestedness;
           scored.push({ id: cid, score });
           if (score < scoreMin) scoreMin = score;
           if (score > scoreMax) scoreMax = score;
@@ -551,8 +573,17 @@ async function runGRASP(versionId, config) {
       for (const uid of sol[i].units) assignMap[uid] = i;
     }
 
-    // Cập nhật center (medoid)
-    for (let i = 0; i < p; i++) sol[i].center = computeCenter(sol[i].units);
+    // Cập nhật center và tính sumCy, sumCx lưu sẵn để cập nhật O(1)
+    for (let i = 0; i < p; i++) {
+      let sumCy = 0, sumCx = 0;
+      for (const id of sol[i].units) {
+        sumCy += unitMap[id].cy;
+        sumCx += unitMap[id].cx;
+      }
+      sol[i].sumCy = sumCy;
+      sol[i].sumCx = sumCx;
+      sol[i].center = { cy: sumCy / sol[i].units.length, cx: sumCx / sol[i].units.length };
+    }
 
     // Xây dựng tập lân cận N(S): các cạnh biên giữa 2 territory khác nhau
     // N(S) = {(i,j) ∈ E : q(i) ≠ q(j)}
@@ -598,16 +629,45 @@ async function runGRASP(versionId, config) {
 
         // 1. Tính sự thay đổi của độ phân tán (Dispersion - MSE compactness)
         let oldZ1 = 0, newZ1 = 0;
-        for (const id of t.units) oldZ1 += getDistToCenterSq(id, t.center);
-        for (const id of t2.units) oldZ1 += getDistToCenterSq(id, t2.center);
-        let nc1 = computeCenter(t1New);
-        let nc2 = computeCenter(t2New);
-        for (const id of t1New) newZ1 += getDistToCenterSq(id, nc1);
-        for (const id of t2New) newZ1 += getDistToCenterSq(id, nc2);
+        let maxD_t_old = 0, maxD_t2_old = 0;
+        for (const id of t.units) {
+          const dSq = getDistToCenterSq(id, t.center);
+          oldZ1 += dSq;
+          if (dSq > maxD_t_old) maxD_t_old = dSq;
+        }
+        for (const id of t2.units) {
+          const dSq = getDistToCenterSq(id, t2.center);
+          oldZ1 += dSq;
+          if (dSq > maxD_t2_old) maxD_t2_old = dSq;
+        }
+        
+        // Tính toán tâm mới nc1, nc2 cực nhanh bằng O(1)
+        let newSumCy1 = t.sumCy - unitMap[uid].cy;
+        let newSumCx1 = t.sumCx - unitMap[uid].cx;
+        let nc1 = { cy: newSumCy1 / t1New.length, cx: newSumCx1 / t1New.length };
 
-        // Tính toán khoảng cách tuyến tính trung bình (RMS) thay vì tổng bình phương
-        // để dispDelta có cùng độ lớn đại số (magnitude) với balDelta
-        let dispDelta = globalMaxDist > 0 ? (Math.sqrt(newZ1) - Math.sqrt(oldZ1)) / globalMaxDist : 0;
+        let newSumCy2 = t2.sumCy + unitMap[uid].cy;
+        let newSumCx2 = t2.sumCx + unitMap[uid].cx;
+        let nc2 = { cy: newSumCy2 / t2New.length, cx: newSumCx2 / t2New.length };
+
+        let maxD_t_new = 0, maxD_t2_new = 0;
+        for (const id of t1New) {
+          const dSq = getDistToCenterSq(id, nc1);
+          newZ1 += dSq;
+          if (dSq > maxD_t_new) maxD_t_new = dSq;
+        }
+        for (const id of t2New) {
+          const dSq = getDistToCenterSq(id, nc2);
+          newZ1 += dSq;
+          if (dSq > maxD_t2_new) maxD_t2_new = dSq;
+        }
+
+        // Tính toán độ gọn dựa trên cả độ phân tán và BÁN KÍNH LỚN NHẤT (maxD)
+        // Việc phạt nặng bán kính lớn nhất (phân bổ dài mảnh) bằng hệ số 1.5
+        // sẽ triệt tiêu hoàn toàn các hình dạng nối dài xiên xẹo, ép đa giác bo tròn gọn.
+        let oldCompactness = Math.sqrt(oldZ1) + 1.5 * (Math.sqrt(maxD_t_old) + Math.sqrt(maxD_t2_old));
+        let newCompactness = Math.sqrt(newZ1) + 1.5 * (Math.sqrt(maxD_t_new) + Math.sqrt(maxD_t2_new));
+        let dispDelta = globalMaxDist > 0 ? (newCompactness - oldCompactness) / globalMaxDist : 0;
 
         // 2. Tính sự thay đổi của độ lệch cân bằng (Balance deviation)
         let oldDev = Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
@@ -656,12 +716,18 @@ async function runGRASP(versionId, config) {
 
         t.units = bestMoveData.t1New;
         t.customers -= bestMoveData.uCust;
+        
+        // Cập nhật tổng toạ độ và tâm vùng O(1) sau hoán đổi
+        t.sumCy -= unitMap[uid].cy;
+        t.sumCx -= unitMap[uid].cx;
+        t.center = { cy: t.sumCy / t.units.length, cx: t.sumCx / t.units.length };
+
         t2.units = bestMoveData.t2New;
         t2.customers += bestMoveData.uCust;
+        t2.sumCy += unitMap[uid].cy;
+        t2.sumCx += unitMap[uid].cx;
+        t2.center = { cy: t2.sumCy / t2.units.length, cx: t2.sumCx / t2.units.length };
 
-        // Cập nhật center (medoid) sau move
-        t.center = computeCenter(t.units);
-        t2.center = computeCenter(t2.units);
         // Cập nhật assignMap: q(uid) = j
         assignMap[uid] = j;
         lsMoves++;
@@ -681,7 +747,7 @@ async function runGRASP(versionId, config) {
     let fDispS = 0,
       fTdev = 0;
     for (let i = 0; i < p; i++) {
-      sol[i].center = computeCenter(sol[i].units);
+      sol[i].center = { cy: sol[i].sumCy / sol[i].units.length, cx: sol[i].sumCx / sol[i].units.length };
       for (const uid of sol[i].units)
         fDispS += getDistToCenterSq(uid, sol[i].center);
       fTdev += mu1 > 0 ? Math.abs(sol[i].customers - mu1) / mu1 : 0;
@@ -712,67 +778,55 @@ async function runGRASP(versionId, config) {
     }
   }
 
-  // --- SAVE TO DB ---
-  reportProgress(MAX_ITER, MAX_ITER, `Đang cập nhật màu sắc bản đồ...`);
-
+  // --- PREPARE ASSIGNMENTS AND SUMMARIES ---
   const summary = [];
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+  const assignments = {};
+  const globalAssigned = new Set(); // Global conflict check để ngăn đếm lặp 1 ô cho nhiều vùng
 
-    const idUpdates = [];
-    const colorUpdates = [];
-    const globalAssigned = new Set(); // Global conflict check để ngăn đếm lặp 1 ô cho nhiều vùng
+  for (let i = 0; i < p; i++) {
+    const hue = (i * 360) / p;
+    const color = hslToHex(hue, 75, 55);
+    let t = bestSolution[i];
 
-    for (let i = 0; i < p; i++) {
-      const hue = (i * 360) / p;
-      const color = hslToHex(hue, 75, 55);
-      let t = bestSolution[i];
-
-      let uniqueUnits = [];
-      for (const uid of t.units) {
-        const strId = String(uid);
-        if (!globalAssigned.has(strId)) {
-          globalAssigned.add(strId);
-          uniqueUnits.push(uid);
-        }
+    let uniqueUnits = [];
+    for (const uid of t.units) {
+      const strId = String(uid);
+      if (!globalAssigned.has(strId)) {
+        globalAssigned.add(strId);
+        uniqueUnits.push(uid);
       }
-
-      let totalOrders = 0;
-      let totalCustomers = 0;
-
-      uniqueUnits.forEach((uid) => {
-        totalOrders += unitMap[uid].order_count;
-        totalCustomers += unitMap[uid].customer_count;
-        idUpdates.push(uid);
-        colorUpdates.push(color);
-      });
-
-      summary.push({
-        color,
-        polygonCount: uniqueUnits.length,
-        customerCount: totalCustomers,
-        orderCount: totalOrders,
-      });
     }
 
-    if (idUpdates.length > 0) {
-      // Gộp các ID và thực hiện UPDATE theo lô (Bulk Update) để tối ưu round-trip
-      await client.query(`
-        UPDATE basic_units AS b
-        SET color = c.color
-        FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS color) AS c
-        WHERE b.id::text = c.id
-      `, [idUpdates.map(String), colorUpdates]);
-    }
+    let totalOrders = 0;
+    let totalCustomers = 0;
 
-    await client.query("COMMIT");
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
+    uniqueUnits.forEach((uid) => {
+      totalOrders += unitMap[uid].order_count;
+      totalCustomers += unitMap[uid].customer_count;
+      assignments[String(uid)] = color;
+    });
+
+    summary.push({
+      color,
+      polygonCount: uniqueUnits.length,
+      customerCount: totalCustomers,
+      orderCount: totalOrders,
+    });
   }
+
+  // Calculate load metrics
+  let sumDevSq = 0;
+  let maxZoneCust = 0;
+  let minZoneCust = Infinity;
+  for (const s of summary) {
+    if (s.customerCount > maxZoneCust) maxZoneCust = s.customerCount;
+    if (s.customerCount < minZoneCust) minZoneCust = s.customerCount;
+    const dev = s.customerCount - mu1;
+    sumDevSq += dev * dev;
+  }
+  const stdDev = Math.sqrt(sumDevSq / p);
+  const cv = mu1 > 0 ? (stdDev / mu1) * 100 : 0; // Coefficient of Variation in %
+  const maxDevPercent = mu1 > 0 ? (Math.max(Math.abs(maxZoneCust - mu1), Math.abs(minZoneCust - mu1)) / mu1) * 100 : 0;
 
   return {
     iterations: MAX_ITER,
@@ -780,9 +834,14 @@ async function runGRASP(versionId, config) {
     bestRho,
     localSearchMoves: totalLsMoves,
     contiguityVerified: contiguityOk,
+    cv,
+    maxDevPercent,
+    minZoneCust,
+    maxZoneCust,
     summary,
+    assignments,
     message: contiguityOk
-      ? "Hoàn tất BGRASP. Tất cả các vùng đều liên thông."
+      ? "Hoàn tất BGRASP."
       : "Hoàn tất BGRASP. CẢNH BÁO: Một số vùng có thể chưa hoàn toàn liên thông.",
   };
 }
@@ -790,8 +849,67 @@ async function runGRASP(versionId, config) {
 (async () => {
   try {
     const { versionId, config, jobId } = workerData;
-    const result = await runGRASP(versionId, config);
-    reportDone(result);
+
+    // Tiến hành chạy tuần tự 3 phương án để người dùng so sánh
+    reportProgress(0, 3, "Đang tính toán Phương án 1 (Ưu tiên nhỏ gọn, lambda = 0.85)...");
+    const opt1 = await runGRASP(versionId, config, 0.85);
+
+    reportProgress(1, 3, "Đang tính toán Phương án 2 (Cân bằng tối ưu, lambda = 0.70)...");
+    const opt2 = await runGRASP(versionId, config, 0.70);
+
+    reportProgress(2, 3, "Đang tính toán Phương án 3 (Cân bằng tải trọng, lambda = 0.40)...");
+    const opt3 = await runGRASP(versionId, config, 0.40);
+
+    const options = [
+      {
+        name: "Phương án 1: Ưu tiên nhỏ gọn & bo tròn",
+        description: "Tập trung tối đa vào việc làm gọn các vùng đa giác, tạo thành hình tròn/hình vuông khít nhau. Độ lệch khách hàng có thể cao hơn.",
+        lambda: 0.85,
+        metrics: {
+          bestRho: opt1.bestRho,
+          cv: opt1.cv,
+          maxDevPercent: opt1.maxDevPercent,
+          minZoneCust: opt1.minZoneCust,
+          maxZoneCust: opt1.maxZoneCust,
+          contiguityVerified: opt1.contiguityVerified
+        },
+        summary: opt1.summary,
+        assignments: opt1.assignments
+      },
+      {
+        name: "Phương án 2: Cân bằng tối ưu",
+        description: "Cân đối hài hòa giữa độ gọn gàng hình học của các vùng và phân bổ số lượng khách hàng/đơn hàng tương đối đồng đều.",
+        lambda: 0.70,
+        metrics: {
+          bestRho: opt2.bestRho,
+          cv: opt2.cv,
+          maxDevPercent: opt2.maxDevPercent,
+          minZoneCust: opt2.minZoneCust,
+          maxZoneCust: opt2.maxZoneCust,
+          contiguityVerified: opt2.contiguityVerified
+        },
+        summary: opt2.summary,
+        assignments: opt2.assignments
+      },
+      {
+        name: "Phương án 3: Cân bằng tải trọng",
+        description: "Ưu tiên tối đa việc chia khách hàng/đơn hàng cực kỳ đồng đều giữa các vùng, đồng thời duy trì độ liên thông và tránh hình dạng quá méo mó.",
+        lambda: 0.40,
+        metrics: {
+          bestRho: opt3.bestRho,
+          cv: opt3.cv,
+          maxDevPercent: opt3.maxDevPercent,
+          minZoneCust: opt3.minZoneCust,
+          maxZoneCust: opt3.maxZoneCust,
+          contiguityVerified: opt3.contiguityVerified
+        },
+        summary: opt3.summary,
+        assignments: opt3.assignments
+      }
+    ];
+
+    reportProgress(3, 3, "Hoàn tất tính toán cả 3 phương án!");
+    reportDone({ options });
   } catch (err) {
     reportError(err);
   } finally {

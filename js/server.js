@@ -10,11 +10,16 @@ const path = require("path");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "../public")));
+app.use(express.static(path.join(__dirname, "../public"), {
+  setHeaders: function (res, path, stat) {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  }
+}));
 
 // Route mặc định để phục vụ file index.html
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+  res.sendFile(path.join(__dirname, "../public", "index.html"));
 });
 
 // Kết nối các Route với tiền tố /api

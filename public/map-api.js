@@ -194,7 +194,11 @@ window.cancelBulkMode = function () {
   }
 };
 
-window.renderDistrictManagementList = async function (units) {
+window.currentSortBy = "default";
+window.currentSortDirection = "desc";
+window.originalUnitsList = [];
+
+window.renderDistrictManagementList = async function (units, isSortingAction = false) {
   const listDiv = document.getElementById("district-management-list");
   if (!listDiv) return;
 
@@ -268,15 +272,66 @@ window.renderDistrictManagementList = async function (units) {
   if (!activeProvince) {
     listDiv.innerHTML =
       '<p class="empty-msg">Vui lòng chọn một Vùng trên thanh công cụ.</p>';
+    const sortContainer = document.getElementById("polygon-sort-container");
+    if (sortContainer) sortContainer.style.display = "flex";
     return;
+  }
+
+  // Lưu trữ danh sách gốc khi gọi lần đầu hoặc khi nhận danh sách mới
+  if (!isSortingAction) {
+    window.originalUnitsList = units ? [...units] : [];
+  }
+
+  let displayUnits = [...window.originalUnitsList];
+
+  // Luôn luôn hiển thị phần sắp xếp các ô đa giác
+  const sortContainer = document.getElementById("polygon-sort-container");
+  if (sortContainer) {
+    sortContainer.style.display = "flex";
+  }
+
+  // Thực hiện sắp xếp
+  if (window.currentSortBy && window.currentSortBy !== "default") {
+    displayUnits.sort((a, b) => {
+      let valA, valB;
+      if (window.currentSortBy === "name") {
+        valA = a.name || "";
+        valB = b.name || "";
+        return window.currentSortDirection === "asc"
+          ? valA.localeCompare(valB, "vi", { sensitivity: "base" })
+          : valB.localeCompare(valA, "vi", { sensitivity: "base" });
+      } else if (window.currentSortBy === "orders") {
+        valA = a.order_count ?? a.orders ?? 0;
+        valB = b.order_count ?? b.orders ?? 0;
+      } else if (window.currentSortBy === "customers") {
+        valA = a.customer_count ?? a.customers ?? 0;
+        valB = b.customer_count ?? b.customers ?? 0;
+      } else if (window.currentSortBy === "density") {
+        const custA = a.customer_count ?? a.customers ?? 0;
+        const custB = b.customer_count ?? b.customers ?? 0;
+        const ordA = a.order_count ?? a.orders ?? 0;
+        const ordB = b.order_count ?? b.orders ?? 0;
+        valA = custA > 0 ? ordA / custA : 0;
+        valB = custB > 0 ? ordB / custB : 0;
+      }
+
+      if (valA < valB) return window.currentSortDirection === "asc" ? -1 : 1;
+      if (valA > valB) return window.currentSortDirection === "asc" ? 1 : -1;
+      return 0;
+    });
+  } else {
+    // Với "default" (mặc định), nếu chọn tăng dần thì đảo ngược thứ tự danh sách gốc
+    if (window.currentSortDirection === "asc") {
+      displayUnits.reverse();
+    }
   }
 
   let html = `
         <div class="province-active-content">
             <div class="units-column-container">
                 ${
-                  units && units.length > 0
-                    ? units
+                  displayUnits && displayUnits.length > 0
+                    ? displayUnits
                         .map((u) => {
                           const color = u.color || "#cccccc";
                           const customers =
@@ -318,6 +373,12 @@ window.renderDistrictManagementList = async function (units) {
     `;
 
   listDiv.innerHTML = html;
+
+  // Nếu đã có dữ liệu danh sách thì tự động mở panel quản lý để người dùng thấy sort/nút ngay.
+  const panel = document.getElementById("bottom-management-panel");
+  if (panel && !panel.classList.contains("active")) {
+    window.toggleBottomPanel(true);
+  }
 };
 
 /**
@@ -1393,3 +1454,73 @@ window.updateStatsPanel = async function () {
     contentDiv.innerHTML = `<p class="empty-msg">Lỗi tải dữ liệu.</p>`;
   }
 };
+
+// ============================================================
+// HÀM XỬ LÝ SẮP XẾP ĐA GIÁC (CLIENT-SIDE)
+// ============================================================
+window.toggleSortOptions = function (event) {
+  if (event) event.stopPropagation();
+  const dropdown = document.getElementById("sort-options-list");
+  if (dropdown) {
+    dropdown.classList.toggle("show");
+  }
+};
+
+window.toggleSortDirection = function (event) {
+  if (event) event.stopPropagation();
+  window.currentSortDirection = window.currentSortDirection === "desc" ? "asc" : "desc";
+
+  const dirBtn = document.getElementById("btn-sort-direction");
+  if (dirBtn) {
+    if (window.currentSortDirection === "asc") {
+      dirBtn.setAttribute("title", "Tăng dần");
+      dirBtn.innerHTML = `<i class="fa-solid fa-arrow-up-short-wide direction-icon"></i>`;
+    } else {
+      dirBtn.setAttribute("title", "Giảm dần");
+      dirBtn.innerHTML = `<i class="fa-solid fa-arrow-down-wide-short direction-icon"></i>`;
+    }
+  }
+
+  // Re-render the list with the sorted units
+  if (window.originalUnitsList) {
+    window.renderDistrictManagementList(window.originalUnitsList, true);
+  }
+};
+
+window.applySort = function (sortBy, element, event) {
+  if (event) event.stopPropagation();
+  window.currentSortBy = sortBy;
+
+  // Cập nhật trạng thái active của dropdown
+  const options = document.querySelectorAll(".sort-option-btn");
+  options.forEach((opt) => opt.classList.remove("active"));
+  if (element) {
+    element.classList.add("active");
+  }
+
+  // Cập nhật nhãn của dropdown chính
+  const labelSpan = document.getElementById("current-sort-label");
+  if (labelSpan && element) {
+    labelSpan.innerHTML = element.innerHTML;
+  }
+
+  // Ẩn dropdown
+  const dropdown = document.getElementById("sort-options-list");
+  if (dropdown) {
+    dropdown.classList.remove("show");
+  }
+
+  // Re-render
+  if (window.originalUnitsList) {
+    window.renderDistrictManagementList(window.originalUnitsList, true);
+  }
+};
+
+// Đóng dropdown khi click ra ngoài
+document.addEventListener("click", () => {
+  const dropdown = document.getElementById("sort-options-list");
+  if (dropdown && dropdown.classList.contains("show")) {
+    dropdown.classList.remove("show");
+  }
+});
+

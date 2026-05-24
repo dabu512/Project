@@ -8,4 +8,4 @@ const pool = new Pool({
     port: 5433,
 });
 
-module.exports = pool; // Xuất pool để các file khác có thể "require"
+module.exports = pool;

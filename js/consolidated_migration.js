@@ -1,13 +1,4 @@
-/**
- * CONSOLIDATED DB MIGRATION HISTORY
- * 
- * This file merges the historical migrations from:
- * - scratch_db.js
- * - scratch_db2.js
- * - scratch_db3.js
- * 
- * It serves as a single, sequential source of truth for the database updates.
- */
+
 
 const pool = require('../db.js');
 
@@ -17,7 +8,6 @@ async function runMigration() {
     try {
         await pool.query('BEGIN');
 
-        // --- Giai đoạn 1 (Tương ứng scratch_db.js) ---
         console.log('Giai đoạn 1: Đồng bộ hóa vai trò và cập nhật bảng districts...');
         try {   
             await pool.query('ALTER TABLE districts RENAME COLUMN driver_id TO sales_id;');
@@ -45,13 +35,11 @@ async function runMigration() {
             console.log('  - Lỗi khi thêm region_id:', e.message);
         }
 
-        // --- Giai đoạn 2 (Tương ứng scratch_db2.js) ---
         console.log('Giai đoạn 2: Thay thế region_id bằng province_id cho users...');
         await pool.query('ALTER TABLE users DROP COLUMN IF EXISTS region_id;');
         await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS province_id INTEGER REFERENCES provinces(id) ON DELETE SET NULL;');
         console.log('  - Đã thêm cột province_id vào bảng users thay thế cho region_id');
 
-        // --- Giai đoạn 3 (Tương ứng scratch_db3.js) ---
         console.log('Giai đoạn 3: Bổ sung dữ liệu provinces mẫu...');
         const res = await pool.query("INSERT INTO provinces (name, region_id) VALUES ('Hải Phòng', 1) ON CONFLICT DO NOTHING RETURNING id;");
         if (res.rows.length > 0) {

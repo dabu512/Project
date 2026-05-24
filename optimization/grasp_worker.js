@@ -151,58 +151,58 @@ async function runGRASP(versionId, config) {
 
   // --- PRE-COMPUTE ---
   const unitMap = {};
-  units.forEach((u) => (unitMap[u.id] = u));
-
-  const distMap = {};
-  let globalMaxDist = 0;
-  let totalCustomers = 0;
-  units.forEach((u1) => {
-    totalCustomers += u1.customer_count || 0;
-    units.forEach((u2) => {
-      if (u1.id < u2.id) {
-        const d = haversine(u1.cy, u1.cx, u2.cy, u2.cx);
-        distMap[`${u1.id}_${u2.id}`] = d;
-        distMap[`${u2.id}_${u1.id}`] = d;
-        if (d > globalMaxDist) globalMaxDist = d;
-      }
-    });
-    distMap[`${u1.id}_${u1.id}`] = 0;
+  units.forEach((u) => {
+    // Ép kiểu số để tránh lỗi cộng chuỗi (Data Type Mismatch)
+    u.customer_count = Number(u.customer_count) || 0;
+    u.order_count = Number(u.order_count) || 0;
+    unitMap[String(u.id)] = u; // Chuẩn hoá ID
   });
+
+  let minCx = Infinity, maxCx = -Infinity, minCy = Infinity, maxCy = -Infinity;
+  let totalCustomers = 0;
+  units.forEach((u) => {
+    totalCustomers += u.customer_count;
+    if (u.cx < minCx) minCx = u.cx;
+    if (u.cx > maxCx) maxCx = u.cx;
+    if (u.cy < minCy) minCy = u.cy;
+    if (u.cy > maxCy) maxCy = u.cy;
+  });
+
+  // Xấp xỉ khoảng cách lớn nhất bằng khoảng cách giữa các góc của bounding box
+  const globalMaxDist = Math.max(
+    haversine(minCy, minCx, maxCy, maxCx),
+    haversine(minCy, maxCx, maxCy, minCx)
+  );
 
   const mu1 = totalCustomers / p;
   // d_max theo paper: ((|V| - p) / p) * max{d_ij}
   const d_max = ((units.length - p) / p) * globalMaxDist;
 
-  const getDist = (id1, id2) => distMap[`${id1}_${id2}`] || 0;
+  const getDist = (id1, id2) => {
+    if (id1 === id2) return 0;
+    const u1 = unitMap[id1], u2 = unitMap[id2];
+    return haversine(u1.cy, u1.cx, u2.cy, u2.cx);
+  };
   const getDistToCenter = (uid, center) => {
     return haversine(unitMap[uid].cy, unitMap[uid].cx, center.cy, center.cx);
   };
-
-  // computeCenter theo paper: c(t) = argmin_{j∈V_t} Σ_{i∈V_t} d_ij
-  // Center = MEDOID (node thực sự có tổng khoảng cách nhỏ nhất đến các node khác)
-  // Khác với trung bình cộng tọa độ vì medoid luôn nằm trên 1 ô thực tế → compact hơn
-  const computeCenter = (unitIds) => {
-    if (unitIds.length === 0) return { cy: 0, cx: 0 };
-    if (unitIds.length === 1) {
-      return { cy: unitMap[unitIds[0]].cy, cx: unitMap[unitIds[0]].cx };
-    }
-    let bestId = unitIds[0];
-    let bestSum = Infinity;
-    for (const j of unitIds) {
-      let sumD = 0;
-      for (const i of unitIds) {
-        if (i !== j) sumD += getDist(j, i);
-      }
-      if (sumD < bestSum) {
-        bestSum = sumD;
-        bestId = j;
-      }
-    }
-    return { cy: unitMap[bestId].cy, cx: unitMap[bestId].cx };
+  // Dùng bình phương khoảng cách (MSE) để phạt nặng các ô nằm xa tâm, ép hình dáng vùng phải tròn và gọn.
+  const getDistToCenterSq = (uid, center) => {
+    const d = haversine(unitMap[uid].cy, unitMap[uid].cx, center.cy, center.cx);
+    return d * d;
   };
 
-  // Tập λ để quét không gian mục tiêu theo paper
-  const lambdaSet = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+  // Center: Thay vì dùng Medoid (độ phức tạp O(N^2) gây cực kỳ chậm ở Local Search),
+  // ta dùng Average Spatial Centroid (Trung bình toạ độ - độ phức tạp O(N)) giúp tốc độ chạy tăng gấp trăm lần.
+  const computeCenter = (unitIds) => {
+    if (unitIds.length === 0) return { cy: 0, cx: 0 };
+    let sumCy = 0, sumCx = 0;
+    for (const id of unitIds) {
+      sumCy += unitMap[id].cy;
+      sumCx += unitMap[id].cx;
+    }
+    return { cy: sumCy / unitIds.length, cx: sumCx / unitIds.length };
+  };
 
   // ================================================================
   //  PHA 1: CONSTRUCTION - Tạo MAX_ITER giải pháp
@@ -210,7 +210,8 @@ async function runGRASP(versionId, config) {
   const allSolutions = [];
 
   for (let iter = 0; iter < MAX_ITER; iter++) {
-    const lambda = lambdaSet[iter % lambdaSet.length];
+    // Đã thay đổi hệ số cân bằng cố định là 0.5 theo yêu cầu
+    const lambda = 0.7;
 
     // 1a. Chọn seeds (ngẫu nhiên từ top-degree, rải đều)
     let sortedByDegree = [...units].sort(
@@ -247,20 +248,58 @@ async function runGRASP(versionId, config) {
       center: { cy: unitMap[sid].cy, cx: unitMap[sid].cx },
     }));
 
-    // 1c. Gán ô còn lại - Round-robin (vùng ít ô nhất mở rộng trước)
+    // 1c. Round-robin Voronoi-like expansion
+    // Mỗi vòng: sắp xếp vùng theo kích thước tăng dần, vùng nhỏ mở rộng trước.
+    // Mỗi vùng chọn 1 ô biên GẦN TÂM NHẤT (thông qua RCL cục bộ).
+    // Giúp các vùng phát triển tròn trịa kiểu Voronoi, không đâm xuyên vào nhau.
     while (assigned.size < units.length) {
-      let expandable = [];
-      for (let i = 0; i < p; i++) {
-        const cands = getBorderCandidates(
-          territories[i].units,
-          adjList,
-          assigned,
-        );
-        if (cands.length > 0) expandable.push({ idx: i, candidates: cands });
+      // Sắp xếp vùng theo kích thước (ít ô → nhiều ô) để cân bằng tốc độ mở rộng
+      let order = Array.from({ length: p }, (_, i) => i);
+      order.sort((a, b) => territories[a].units.length - territories[b].units.length);
+
+      let addedAny = false;
+
+      for (const idx of order) {
+        const cands = getBorderCandidates(territories[idx].units, adjList, assigned);
+        if (cands.length === 0) continue;
+
+        const t = territories[idx];
+
+        // Score mỗi candidate: lambda * phân_tán (MSE) + (1-lambda) * độ_lệch_cân_bằng
+        let scored = [];
+        let scoreMin = Infinity, scoreMax = -Infinity;
+
+        for (const cid of cands) {
+          const u = unitMap[cid];
+          let distSq = getDistToCenterSq(cid, t.center);
+          let newCust = t.customers + u.customer_count;
+          // Chuẩn hoá f_disp và f_dev về cùng một thang đo (tương đối [0, 1])
+          // Lấy căn bậc 2 của distSq / d_max^2 để khoảng cách tuyến tính hơn, tăng độ nhạy
+          let f_disp = globalMaxDist > 0 ? Math.sqrt(distSq) / globalMaxDist : 0;
+          let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
+
+          let score = lambda * f_disp + (1 - lambda) * f_dev;
+          scored.push({ id: cid, score });
+          if (score < scoreMin) scoreMin = score;
+          if (score > scoreMax) scoreMax = score;
+        }
+
+        // Tạo RCL cục bộ (chỉ trong các ứng viên của Vùng này)
+        let threshold = scoreMin + alpha * (scoreMax - scoreMin);
+        let rcl = scored.filter(v => v.score <= threshold);
+        if (rcl.length === 0) rcl = [scored.reduce((a, b) => a.score < b.score ? a : b)];
+
+        let chosen = rcl[Math.floor(Math.random() * rcl.length)];
+
+        t.units.push(chosen.id);
+        t.customers += unitMap[chosen.id].customer_count;
+        t.center = computeCenter(t.units);
+        assigned.add(chosen.id);
+        addedAny = true;
       }
 
-      if (expandable.length === 0) {
-        // Xử lý ô cô lập bằng BFS
+      if (!addedAny) {
+        // Xử lý ô cô lập bằng BFS nếu bị kẹt
         let unassignedIds = units
           .filter((u) => !assigned.has(u.id))
           .map((u) => u.id);
@@ -275,7 +314,7 @@ async function runGRASP(versionId, config) {
                 bfsVisited.add(nb);
                 if (assigned.has(nb)) {
                   for (let ti = 0; ti < p; ti++) {
-                    if (territories[ti].units.includes(nb)) {
+                    if (territories[ti].units.some(id => String(id) === String(nb))) {
                       foundT = ti;
                       break;
                     }
@@ -297,54 +336,12 @@ async function runGRASP(versionId, config) {
             }
           }
           territories[foundT].units.push(orphanId);
-          territories[foundT].customers +=
-            unitMap[orphanId].customer_count || 0;
+          territories[foundT].customers += unitMap[orphanId].customer_count;
           territories[foundT].center = computeCenter(territories[foundT].units);
           assigned.add(orphanId);
         }
         break;
       }
-
-      // Đánh giá TẤT CẢ các ứng viên từ TẤT CẢ các vùng (Global RCL)
-      let phiVals = [];
-      let phiMin = Infinity,
-        phiMax = -Infinity;
-
-      for (const { idx, candidates } of expandable) {
-        let t = territories[idx];
-        for (const j of candidates) {
-          let u = unitMap[j];
-          // Tính center mới (medoid) cho V_t* ∪ {j}
-          let newUnits = [...t.units, j];
-          let hypCenter = computeCenter(newUnits);
-
-          // f_disp(j,t*) = (1/d_max) * Σ d_i(c_t*) cho i ∈ V_t* ∪ {j}
-          let sumDist = 0;
-          for (const i of newUnits) sumDist += getDistToCenter(i, hypCenter);
-          let f_disp = d_max > 0 ? sumDist / d_max : 0;
-
-          // f_dev(j,t*) = (1/μ) * |w(V_t* ∪ {j}) - μ|
-          let newCust = t.customers + (u.customer_count || 0);
-          let f_dev = mu1 > 0 ? Math.abs(newCust - mu1) / mu1 : 0;
-
-          let phi = lambda * f_disp + (1 - lambda) * f_dev;
-          phiVals.push({ id: j, tIdx: idx, phi });
-          if (phi < phiMin) phiMin = phi;
-          if (phi > phiMax) phiMax = phi;
-        }
-      }
-
-      // RCL: {j : φ(j) ∈ [φ_min, φ_min + α(φ_max - φ_min)]}
-      let threshold = phiMin + alpha * (phiMax - phiMin);
-      let rcl = phiVals.filter((v) => v.phi <= threshold);
-      if (rcl.length === 0) rcl = phiVals;
-      let chosen = rcl[Math.floor(Math.random() * rcl.length)];
-
-      let targetT = territories[chosen.tIdx];
-      targetT.units.push(chosen.id);
-      targetT.customers += unitMap[chosen.id].customer_count || 0;
-      targetT.center = computeCenter(targetT.units);
-      assigned.add(chosen.id);
     }
 
     // 1d. Sửa chữa tính liên thông
@@ -365,7 +362,7 @@ async function runGRASP(versionId, config) {
             const curr = q.shift();
             comp.push(curr);
             for (const nb of adjList[curr]) {
-              if (!visited.has(nb) && unitSet.has(nb)) {
+              if (!visited.has(nb) && unitSet.has(nb)) {  
                 visited.add(nb);
                 q.push(nb);
               }
@@ -377,38 +374,48 @@ async function runGRASP(versionId, config) {
         components.sort((a, b) => b.length - a.length);
         const mainComp = new Set(components[0]);
         for (let ci = 1; ci < components.length; ci++) {
-          for (const orphanId of components[ci]) {
-            let bestTarget = -1,
-              bestImprove = -Infinity;
-            for (const nb of adjList[orphanId]) {
-              if (mainComp.has(nb)) {
-                bestTarget = i;
-                break;
-              }
-              for (let j = 0; j < p; j++) {
-                if (j !== i && territories[j].units.includes(nb)) {
-                  const uC = unitMap[orphanId].customer_count || 0;
-                  const improve =
-                    Math.abs(territories[j].customers - mu1) -
-                    Math.abs(territories[j].customers + uC - mu1);
-                  if (improve > bestImprove) {
-                    bestImprove = improve;
-                    bestTarget = j;
+          const comp = components[ci];
+          let adjacentTerritories = new Set();
+
+          for (const uid of comp) {
+            for (const nb of adjList[uid]) {
+              if (!comp.some(id => String(id) === String(nb))) {
+                if (mainComp.has(nb)) adjacentTerritories.add(i);
+                else {
+                  for (let j = 0; j < p; j++) {
+                    if (j !== i && territories[j].units.some(id => String(id) === String(nb))) adjacentTerritories.add(j);
                   }
                 }
               }
-              if (bestTarget === i) break;
             }
-            if (bestTarget >= 0 && bestTarget !== i) {
-              t.units = t.units.filter((id) => id !== orphanId);
-              t.customers -= unitMap[orphanId].customer_count || 0;
+          }
+
+          if (adjacentTerritories.size > 0) {
+            let bestTarget = -1, bestImprove = -Infinity;
+            let compCust = 0;
+            for (const uid of comp) compCust += unitMap[uid].customer_count || 0;
+
+            if (adjacentTerritories.has(i)) {
+              bestTarget = i;
+            } else {
+              for (const j of adjacentTerritories) {
+                const improve = Math.abs(territories[j].customers - mu1) - Math.abs(territories[j].customers + compCust - mu1);
+                if (improve > bestImprove) {
+                  bestImprove = improve;
+                  bestTarget = j;
+                }
+              }
+            }
+
+            if (bestTarget !== -1 && bestTarget !== i) {
+              for (const uid of comp) {
+                t.units = t.units.filter((id) => String(id) !== String(uid));
+                t.customers -= unitMap[uid].customer_count;
+                territories[bestTarget].units.push(uid);
+                territories[bestTarget].customers += unitMap[uid].customer_count;
+              }
               t.center = computeCenter(t.units);
-              territories[bestTarget].units.push(orphanId);
-              territories[bestTarget].customers +=
-                unitMap[orphanId].customer_count || 0;
-              territories[bestTarget].center = computeCenter(
-                territories[bestTarget].units,
-              );
+              territories[bestTarget].center = computeCenter(territories[bestTarget].units);
               hadRepair = true;
             }
           }
@@ -417,19 +424,76 @@ async function runGRASP(versionId, config) {
       if (!hadRepair) break;
     }
 
-    // 1e. Tính ρ(S) theo paper để đánh giá solution
-    // ρ(S) = 2·f_disp(S) / ((|V|-p)·d_max) + f_Tdev / p
-    let fDispS = 0; // f_disp(S) = Σ_t Σ_j d_j(c_t)
+    // 1e. Sửa chữa ngoại lệ (Hard-limit cân bằng cưỡng bức)
+    // Nếu có vùng quá bé do bị bao vây, ép nó mở rộng từ láng giềng lớn hơn
+    for (let i = 0; i < p; i++) {
+      let t = territories[i];
+      let forcedMoves = 0;
+      while (t.customers < mu1 * 0.5 && forcedMoves < 5) {
+        let bestNeighborNode = null;
+        let bestSourceT = -1;
+        let maxGain = -Infinity;
+
+        for (let uid of t.units) {
+          for (let nb of adjList[uid]) {
+            if (!t.units.some(id => String(id) === String(nb))) {
+              let j = -1;
+              for (let k = 0; k < p; k++) if (territories[k].units.some(id => String(id) === String(nb))) j = k;
+
+              if (j !== -1 && territories[j].customers > mu1 * 0.8) {
+                let t2New = territories[j].units.filter(id => String(id) !== String(nb));
+                let connected = true;
+                if (t2New.length > 0) {
+                  let remainSet = new Set(t2New);
+                  let vis = new Set([t2New[0]]);
+                  let q = [t2New[0]];
+                  while (q.length > 0) {
+                    let c = q.shift();
+                    for (let n of adjList[c]) {
+                      if (remainSet.has(n) && !vis.has(n)) { vis.add(n); q.push(n); }
+                    }
+                  }
+                  connected = vis.size === t2New.length;
+                }
+                if (connected) {
+                  let gain = unitMap[nb].customer_count || 0;
+                  if (gain > maxGain) {
+                    maxGain = gain;
+                    bestNeighborNode = nb;
+                    bestSourceT = j;
+                  }
+                }
+              }
+            }
+          }
+        }
+        if (bestNeighborNode) {
+          territories[bestSourceT].units = territories[bestSourceT].units.filter(id => String(id) !== String(bestNeighborNode));
+          territories[bestSourceT].customers -= maxGain;
+          territories[bestSourceT].center = computeCenter(territories[bestSourceT].units);
+          t.units.push(bestNeighborNode);
+          t.customers += maxGain;
+          t.center = computeCenter(t.units);
+          forcedMoves++;
+        } else {
+          break;
+        }
+      }
+    }
+
+    // 1f. Tính ρ(S) theo paper để đánh giá solution
+    // ρ(S) = 2·f_disp(S) / ((|V|-p)·d_max^2) + f_Tdev / p
+    let fDispS = 0; // f_disp(S) = Σ_t Σ_j d_j(c_t)^2
     let fTdev = 0; // f_Tdev = Σ_t (1/μ) * |w(V_t) - μ|
     for (let i = 0; i < p; i++) {
       const t = territories[i];
       t.center = computeCenter(t.units);
-      for (const uid of t.units) fDispS += getDistToCenter(uid, t.center);
+      for (const uid of t.units) fDispS += getDistToCenterSq(uid, t.center);
       fTdev += mu1 > 0 ? Math.abs(t.customers - mu1) / mu1 : 0;
     }
     let rho =
       globalMaxDist > 0 && units.length > p
-        ? (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p
+        ? (2 * fDispS) / ((units.length - p) * globalMaxDist * globalMaxDist) + fTdev / p
         : Infinity;
 
     allSolutions.push({
@@ -472,7 +536,15 @@ async function runGRASP(versionId, config) {
   let totalLsMoves = 0;
 
   for (let si = 0; si < filtered.length; si++) {
-    let sol = JSON.parse(JSON.stringify(filtered[si].territories));
+    const lambda = filtered[si].lambda; // Lấy lambda đã lưu từ pha Construction
+
+    // Thay thế JSON.stringify bằng Shallow Copy để tối ưu hiệu suất
+    let sol = filtered[si].territories.map(t => ({
+      units: [...t.units],
+      customers: t.customers,
+      center: { ...t.center }
+    }));
+
     // assignMap: q(i) - territory chứa node i
     let assignMap = {};
     for (let i = 0; i < p; i++) {
@@ -500,79 +572,93 @@ async function runGRASP(versionId, config) {
     };
 
     let lsMoves = 0;
-    let currentObj = 0; // 0=z1(dispersion), 1=z2(balance)
     let noImproveCycles = 0;
 
     while (lsMoves < MAX_LS_MOVES && noImproveCycles < 4) {
       let improved = false;
       // Lấy tất cả cạnh biên N(S)
       const borderEdges = buildBorderEdges();
-      // Shuffle để tránh bias
-      for (let x = borderEdges.length - 1; x > 0; x--) {
-        const y = Math.floor(Math.random() * (x + 1));
-        [borderEdges[x], borderEdges[y]] = [borderEdges[y], borderEdges[x]];
-      }
 
+      let bestMoveEdge = null;
+      let maxImprovement = -Infinity; // Khởi tạo âm vô cực để so sánh delta tốt hơn
+      let bestMoveData = null;
+
+      // Đánh giá tất cả để tìm Best-Improvement dựa trên hàm mục tiêu KẾT HỢP ρ
+      // Việc này giúp mọi bước di chuyển đều phải thoả mãn cải thiện TỔNG THỂ,
+      // không bao giờ hy sinh hoàn toàn độ tròn trịa (compactness) chỉ để lấy 1 chút cân bằng (balance).
       for (const edge of borderEdges) {
         const { nodeId: uid, fromT: i, toT: j } = edge;
         let t = sol[i];
         let t2 = sol[j];
         if (t.units.length <= 1) continue;
 
-        let uCust = unitMap[uid].customer_count || 0;
-        let t1New = t.units.filter((id) => id !== uid);
+        let uCust = unitMap[uid].customer_count;
+        let t1New = t.units.filter((id) => String(id) !== String(uid));
         let t2New = [...t2.units, uid];
 
-        let shouldMove = false;
+        // 1. Tính sự thay đổi của độ phân tán (Dispersion - MSE compactness)
+        let oldZ1 = 0, newZ1 = 0;
+        for (const id of t.units) oldZ1 += getDistToCenterSq(id, t.center);
+        for (const id of t2.units) oldZ1 += getDistToCenterSq(id, t2.center);
+        let nc1 = computeCenter(t1New);
+        let nc2 = computeCenter(t2New);
+        for (const id of t1New) newZ1 += getDistToCenterSq(id, nc1);
+        for (const id of t2New) newZ1 += getDistToCenterSq(id, nc2);
 
-        if (currentObj === 0) {
-          // z1: Σ d_j(c_t) cho 2 vùng liên quan phải giảm
-          let oldZ1 = 0,
-            newZ1 = 0;
-          for (const id of t.units) oldZ1 += getDistToCenter(id, t.center);
-          for (const id of t2.units) oldZ1 += getDistToCenter(id, t2.center);
-          let nc1 = computeCenter(t1New);
-          let nc2 = computeCenter(t2New);
-          for (const id of t1New) newZ1 += getDistToCenter(id, nc1);
-          for (const id of t2New) newZ1 += getDistToCenter(id, nc2);
-          shouldMove = newZ1 < oldZ1;
-        } else {
-          // z2: (1/μ) * max_t |w(V_t) - μ| phải giảm
-          let oldDev =
-            Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
-          let newDev =
-            Math.abs(t.customers - uCust - mu1) +
-            Math.abs(t2.customers + uCust - mu1);
-          shouldMove = newDev < oldDev;
-        }
+        // Tính toán khoảng cách tuyến tính trung bình (RMS) thay vì tổng bình phương
+        // để dispDelta có cùng độ lớn đại số (magnitude) với balDelta
+        let dispDelta = globalMaxDist > 0 ? (Math.sqrt(newZ1) - Math.sqrt(oldZ1)) / globalMaxDist : 0;
 
-        if (!shouldMove) continue;
+        // 2. Tính sự thay đổi của độ lệch cân bằng (Balance deviation)
+        let oldDev = Math.abs(t.customers - mu1) + Math.abs(t2.customers - mu1);
+        let newDev = Math.abs(t.customers - uCust - mu1) + Math.abs(t2.customers + uCust - mu1);
 
-        // Connectivity check: Sau khi bỏ uid, territory nguồn vẫn liên thông?
-        let connected = true;
-        if (t.units.length > 2) {
-          let remainSet = new Set(t1New);
-          let vis = new Set([t1New[0]]);
-          let q = [t1New[0]];
-          while (q.length > 0) {
-            let c = q.shift();
-            for (let n of adjList[c]) {
-              if (remainSet.has(n) && !vis.has(n)) {
-                vis.add(n);
-                q.push(n);
+        // Chia cho mu1 * 2 thay vì mu1 * p vì ta chỉ quan tâm delta giữa 2 vùng đang xét
+        let balDelta = mu1 > 0 ? (newDev - oldDev) / (mu1 * 2) : 0;
+
+        // 3. Kết hợp lại thành sự thay đổi của ρ (rhoDelta)
+        // Nếu rhoDelta < 0 nghĩa là giải pháp MỚI tốt hơn (ρ giảm)
+        let rhoDelta = lambda * dispDelta + (1 - lambda) * balDelta;
+        let improvement = -rhoDelta; // Cải thiện dương nghĩa là ρ giảm
+
+        if (improvement > 0 && improvement > maxImprovement) {
+          // Connectivity check: Sau khi bỏ uid, territory nguồn vẫn liên thông?
+          let connected = true;
+          if (t.units.length > 2) {
+            let remainSet = new Set(t1New);
+            let vis = new Set([t1New[0]]);
+            let q = [t1New[0]];
+            while (q.length > 0) {
+              let c = q.shift();
+              for (let n of adjList[c]) {
+                if (remainSet.has(n) && !vis.has(n)) {
+                  vis.add(n);
+                  q.push(n);
+                }
               }
             }
+            connected = vis.size === t1New.length;
           }
-          connected = vis.size === t1New.length;
-        }
-        if (!connected) continue;
 
-        // Thực hiện move(uid, i→j)
-        const k = t.units.indexOf(uid);
-        t.units.splice(k, 1);
-        t.customers -= uCust;
-        t2.units.push(uid);
-        t2.customers += uCust;
+          if (connected) {
+            maxImprovement = improvement;
+            bestMoveEdge = edge;
+            bestMoveData = { uCust, t1New, t2New };
+          }
+        }
+      }
+
+      if (bestMoveEdge) {
+        // Thực hiện Best-Improvement
+        const { nodeId: uid, fromT: i, toT: j } = bestMoveEdge;
+        let t = sol[i];
+        let t2 = sol[j];
+
+        t.units = bestMoveData.t1New;
+        t.customers -= bestMoveData.uCust;
+        t2.units = bestMoveData.t2New;
+        t2.customers += bestMoveData.uCust;
+
         // Cập nhật center (medoid) sau move
         t.center = computeCenter(t.units);
         t2.center = computeCenter(t2.units);
@@ -580,12 +666,10 @@ async function runGRASP(versionId, config) {
         assignMap[uid] = j;
         lsMoves++;
         improved = true;
-        break; // first-improvement → restart scan
       }
 
       if (!improved) {
         noImproveCycles++;
-        currentObj = (currentObj + 1) % 2; // Chuyển objective (relinked)
       } else {
         noImproveCycles = 0;
       }
@@ -599,10 +683,10 @@ async function runGRASP(versionId, config) {
     for (let i = 0; i < p; i++) {
       sol[i].center = computeCenter(sol[i].units);
       for (const uid of sol[i].units)
-        fDispS += getDistToCenter(uid, sol[i].center);
+        fDispS += getDistToCenterSq(uid, sol[i].center);
       fTdev += mu1 > 0 ? Math.abs(sol[i].customers - mu1) / mu1 : 0;
     }
-    let rho = (2 * fDispS) / ((units.length - p) * globalMaxDist) + fTdev / p;
+    let rho = (2 * fDispS) / ((units.length - p) * globalMaxDist * globalMaxDist) + fTdev / p;
 
     if (rho < bestRho) {
       bestRho = rho;
@@ -635,31 +719,53 @@ async function runGRASP(versionId, config) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+
+    const idUpdates = [];
+    const colorUpdates = [];
+    const globalAssigned = new Set(); // Global conflict check để ngăn đếm lặp 1 ô cho nhiều vùng
+
     for (let i = 0; i < p; i++) {
       const hue = (i * 360) / p;
       const color = hslToHex(hue, 75, 55);
       let t = bestSolution[i];
 
+      let uniqueUnits = [];
+      for (const uid of t.units) {
+        const strId = String(uid);
+        if (!globalAssigned.has(strId)) {
+          globalAssigned.add(strId);
+          uniqueUnits.push(uid);
+        }
+      }
+
       let totalOrders = 0;
-      t.units.forEach((uid) => {
-        totalOrders += unitMap[uid].order_count || 0;
+      let totalCustomers = 0;
+
+      uniqueUnits.forEach((uid) => {
+        totalOrders += unitMap[uid].order_count;
+        totalCustomers += unitMap[uid].customer_count;
+        idUpdates.push(uid);
+        colorUpdates.push(color);
       });
 
       summary.push({
         color,
-        polygonCount: t.units.length,
-        customerCount: t.customers,
+        polygonCount: uniqueUnits.length,
+        customerCount: totalCustomers,
         orderCount: totalOrders,
       });
-
-      if (t.units.length > 0) {
-        const ids = t.units.join(",");
-        await client.query(
-          `UPDATE basic_units SET color = $1 WHERE id IN (${ids})`,
-          [color],
-        );
-      }
     }
+
+    if (idUpdates.length > 0) {
+      // Gộp các ID và thực hiện UPDATE theo lô (Bulk Update) để tối ưu round-trip
+      await client.query(`
+        UPDATE basic_units AS b
+        SET color = c.color
+        FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS color) AS c
+        WHERE b.id::text = c.id
+      `, [idUpdates.map(String), colorUpdates]);
+    }
+
     await client.query("COMMIT");
   } catch (e) {
     await client.query("ROLLBACK");

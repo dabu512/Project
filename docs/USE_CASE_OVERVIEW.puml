@@ -1,0 +1,60 @@
+@startuml UC_Overview
+' =============================================
+' TẦNG 1: USE CASE TỔNG QUAN
+' Actor: Admin, Driver (không dùng actor Hệ thống)
+' =============================================
+left to right direction
+skinparam packageStyle rectangle
+
+title Tầng 1 — Use Case tổng quan\nHệ thống GIS Lãnh thổ (Project_anti)
+
+actor "Admin" as Admin
+actor "Driver" as Driver
+
+rectangle "Hệ thống GIS Lãnh thổ" {
+
+  usecase "UC-00\nXác thực" as O0
+  usecase "UC-01\nQuản lý phiên bản\nbản đồ" as O1
+  usecase "UC-02\nQuản lý vùng\nlãnh thổ" as O2
+  usecase "UC-03\nTối ưu phân vùng\n(BGRASP)" as O3
+  usecase "UC-04\nXem bản đồ\n& thống kê" as O4
+  usecase "UC-05\nXem lãnh thổ\n(Driver)" as O5 #lightgray
+}
+
+Admin --> O0
+Admin --> O1
+Admin --> O2
+Admin --> O3
+Admin --> O4
+
+Driver --> O0
+Driver --> O4
+Driver ..> O5
+
+O1 ..> O4 : <<include>>
+O3 ..> O2 : «blocks»\nkhi đang chạy
+
+note right of O1
+  **Phân rã:** UC-SEL, UC-NEW,
+  UC-APP, UC-DEL_VER
+  → USE_CASE_DECOMPOSED.puml
+end note
+
+note right of O2
+  **Phân rã:** Vẽ, Sửa biên,
+  Thuộc tính, Cắt/Gộp,
+  Xóa, Bulk
+  (include: chồng lấn, diện tích…)
+end note
+
+note right of O3
+  **Phân rã:** Chạy BGRASP,
+  Áp dụng phương án
+  (include: khóa, Worker…)
+end note
+
+note bottom of O5
+  Legacy / chưa hoàn thiện
+end note
+
+@enduml

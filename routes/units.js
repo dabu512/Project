@@ -4,18 +4,48 @@ const pool = require("../db");
 
 // --- 1. LẤY DANH SÁCH Ô (GET) ---
 router.get("/", async (req, res) => {
-  const { versionId } = req.query;
+  const { versionId, driverId } = req.query;
   try {
-    if (!versionId) {
+    let targetVersionId = versionId;
+
+    // Nếu không truyền versionId nhưng truyền driverId (ngữ cảnh tài xế)
+    if (!targetVersionId && driverId) {
+      // Vì bảng districts chưa tồn tại hoặc bị xóa trong DB hiện tại,
+      // hệ thống tự động tìm phiên bản 'applied' (đang được admin chọn) của Tỉnh mà tài xế thuộc về.
+      const userRes = await pool.query("SELECT province_id FROM users WHERE id = $1", [driverId]);
+      if (userRes.rows.length > 0 && userRes.rows[0].province_id) {
+        const provinceId = userRes.rows[0].province_id;
+        const versionRes = await pool.query(
+          "SELECT id FROM versions WHERE province_id = $1 AND status = 'applied' LIMIT 1",
+          [provinceId]
+        );
+        if (versionRes.rows.length > 0) {
+          targetVersionId = versionRes.rows[0].id;
+        }
+      }
+
+      // Dự phòng: Nếu vẫn không tìm thấy liên kết nào, tìm phiên bản 'applied' bất kỳ đang hoạt động
+      if (!targetVersionId) {
+        const anyAppliedRes = await pool.query(
+          "SELECT id FROM versions WHERE status = 'applied' ORDER BY created_at DESC LIMIT 1"
+        );
+        if (anyAppliedRes.rows.length > 0) {
+          targetVersionId = anyAppliedRes.rows[0].id;
+        }
+      }
+    }
+
+    if (!targetVersionId) {
       return res.json({ type: "FeatureCollection", features: [] });
     }
 
+    // Truy vấn trực tiếp từ basic_units không tham chiếu đến bảng districts không tồn tại
     let query = `
             SELECT bu.*, ST_AsGeoJSON(bu.geom)::json as geometry
             FROM basic_units bu
             WHERE bu.version_id = $1
         `;
-    let params = [versionId];
+    let params = [targetVersionId];
 
     const result = await pool.query(query, params);
 
@@ -29,6 +59,10 @@ router.get("/", async (req, res) => {
         area: row.area_km2,
         color: row.color || "#3388ff",
         versionId: row.version_id || null,
+        districtId: null,
+        districtName: null,
+        districtColor: null,
+        driverId: null
       },
       geometry: row.geometry,
     }));
@@ -537,6 +571,65 @@ router.post("/build-adjacencies", async (req, res) => {
     res
       .status(500)
       .json({ success: false, message: "Lỗi hệ thống khi tạo đồ thị." });
+  }
+});
+
+// --- TÍNH NĂNG MỚI: SAO CHÉP HÀNG LOẠT ĐA GIÁC (POST) ---
+router.get("/bulk-clone", (req, res) => {
+  res.json({ success: false, message: "Endpoint này chỉ hỗ trợ phương thức POST để nhận dữ liệu sao chép và dán đa giác." });
+});
+
+router.post("/bulk-clone", async (req, res) => {
+  const { version_id, polygons } = req.body;
+  if (!version_id) {
+    return res.status(400).json({ success: false, message: "Thiếu version_id" });
+  }
+  if (!polygons || !Array.isArray(polygons) || polygons.length === 0) {
+    return res.status(400).json({ success: false, message: "Thiếu dữ liệu đa giác sao chép" });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    
+    const insertedIds = [];
+    for (const poly of polygons) {
+      const geomStr = JSON.stringify(poly.geometry);
+      // Tính toán area_km2 ngầm trong DB bằng ST_Area
+      const insertQuery = `
+        INSERT INTO basic_units (name, geom, centroid, customer_count, order_count, color, area_km2, version_id)
+        VALUES (
+          $1, 
+          ST_SetSRID(ST_GeomFromGeoJSON($2), 4326), 
+          ST_Centroid(ST_SetSRID(ST_GeomFromGeoJSON($2), 4326)), 
+          $3, 
+          $4, 
+          $5, 
+          COALESCE(ST_Area(ST_SetSRID(ST_GeomFromGeoJSON($2), 4326)::geography) / 1000000.0, 0), 
+          $6
+        ) 
+        RETURNING id;
+      `;
+      const name = poly.name ? (poly.name.includes(" - Copy") ? poly.name : `${poly.name} - Copy`) : "Ô sao chép";
+      
+      const insertRes = await client.query(insertQuery, [
+        name,
+        geomStr,
+        poly.customer_count || 0,
+        poly.order_count || 0,
+        poly.color || "#3388ff",
+        version_id
+      ]);
+      insertedIds.push(insertRes.rows[0].id);
+    }
+    
+    await client.query("COMMIT");
+    res.json({ success: true, insertedIds, message: `Đã dán thành công ${polygons.length} ô đa giác.` });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    client.release();
   }
 });
 

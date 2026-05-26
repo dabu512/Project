@@ -138,14 +138,19 @@ window.toggleSidebar = function () {
 
   const isOpening = !sidebar.classList.contains("active");
   sidebar.classList.toggle("active");
-  if (toggleBtn) {
-    toggleBtn.style.display = isOpening ? "none" : "flex";
-  }
+
+  const icon = toggleBtn ? toggleBtn.querySelector("i") : null;
 
   if (isOpening) {
     document.body.classList.add("sidebar-open");
+    if (icon) {
+      icon.className = "fa-solid fa-chevron-left";
+    }
   } else {
     document.body.classList.remove("sidebar-open");
+    if (icon) {
+      icon.className = "fa-solid fa-chevron-right";
+    }
   }
 };
 

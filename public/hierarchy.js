@@ -41,7 +41,6 @@ window.loadProvinces = async function () {
   versionSelect.disabled = true;
   document.getElementById("btn-create-version").disabled = true;
   document.getElementById("btn-delete-version").disabled = true;
-  document.getElementById("btn-apply-version").style.display = "none";
 
   clearMap();
 
@@ -80,8 +79,6 @@ window.loadVersions = async function () {
   versionSelect.innerHTML = '<option value="">-- Chọn Bản đồ --</option>';
   versionSelect.disabled = true;
   document.getElementById("btn-create-version").disabled = true;
-  document.getElementById("btn-apply-version").style.display = "none";
-  document.getElementById("btn-apply-version").style.display = "none";
 
   if (!provinceId) return;
 
@@ -92,7 +89,7 @@ window.loadVersions = async function () {
     const data = await res.json();
     if (data.success) {
       data.data.forEach((v) => {
-        let text = `${v.name} (${v.status})`;
+        let text = v.name;
         versionSelect.innerHTML += `<option value="${v.id}" data-status="${v.status}">${text}</option>`;
       });
       versionSelect.disabled = false;
@@ -103,7 +100,7 @@ window.loadVersions = async function () {
         if (savedVersionId && data.data.some((v) => v.id == savedVersionId)) {
           versionSelect.value = savedVersionId;
         } else {
-          // Auto-select applied version if possible, else first
+          // Tự chọn bản ghi applied nếu có, không thì chọn bản ghi đầu tiên
           const applied = data.data.find((v) => v.status === "applied");
           versionSelect.value = applied ? applied.id : data.data[0].id;
         }
@@ -124,23 +121,25 @@ window.onVersionChange = function () {
   else localStorage.removeItem("currentVersionId");
 
   if (!versionId) {
-    document.getElementById("btn-apply-version").style.display = "none";
     document.getElementById("btn-delete-version").disabled = true;
     window.currentVersionId = null;
     window.currentVersionStatus = null;
   } else {
     document.getElementById("btn-delete-version").disabled = false;
-    const selectedOption = versionSelect.options[versionSelect.selectedIndex];
-    const status = selectedOption.getAttribute("data-status");
-
     window.currentVersionId = parseInt(versionId);
-    window.currentVersionStatus = status;
+    window.currentVersionStatus = "applied"; // Auto-applied immediately
 
-    if (status === "draft") {
-      document.getElementById("btn-apply-version").style.display = "block";
-    } else {
-      document.getElementById("btn-apply-version").style.display = "none";
-    }
+    // Gọi API chốt/áp dụng phiên bản này ngầm bên dưới cơ sở dữ liệu
+    fetch(`/api/hierarchy/versions/${versionId}/apply`, {
+      method: "PUT",
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          console.log(`Phiên bản ${versionId} đã được tự động áp dụng chính thức.`);
+        }
+      })
+      .catch((err) => console.error("Lỗi tự động áp dụng phiên bản:", err));
   }
 
   // Luôn luôn gọi tải bản đồ (để load TẤT CẢ các tỉnh ra)
@@ -152,9 +151,6 @@ window.onVersionChange = function () {
   const provSelect = document.getElementById("province-select");
   const provName = provSelect.options[provSelect.selectedIndex].text;
   window.loadProvinceBoundary(provName);
-
-  // Không tự động mở bảng danh sách ở dưới khi chọn xong Version
-  // Người dùng sẽ bật bằng nút "Danh sách đa giác".
 };
 
 window.loadProvinceBoundary = async function (provinceName) {
@@ -215,9 +211,8 @@ window.createNewVersion = async function () {
   const currentVersionId = document.getElementById("version-select").value;
   let versionOptionsHtml = `<option value="">🆕 Bắt đầu trống (không sao chép)</option>`;
   existingVersions.forEach((v) => {
-    const statusLabel = v.status === "applied" ? "✅ Đã chốt" : v.status === "draft" ? "📝 Nháp" : "🗂 Lịch sử";
     const selected = v.id == currentVersionId ? "selected" : "";
-    versionOptionsHtml += `<option value="${v.id}" ${selected}>${v.name} — ${statusLabel}</option>`;
+    versionOptionsHtml += `<option value="${v.id}" ${selected}>${v.name}</option>`;
   });
 
   const { value: formValues, isConfirmed } = await Swal.fire({

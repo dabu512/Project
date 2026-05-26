@@ -1,0 +1,125 @@
+@startuml UC_Decomposed
+' =============================================
+' TẦNG 2: USE CASE PHÂN RÃ
+' Actor: Admin, Driver only
+' UC con kiểu «include» không gắn actor
+' =============================================
+left to right direction
+skinparam packageStyle rectangle
+skinparam linetype orthogonal
+
+title Tầng 2 — Use Case phân rã (Project_anti)
+
+actor "Admin" as Admin
+actor "Driver" as Driver
+
+rectangle "Hệ thống GIS Lãnh thổ" {
+
+  package "UC-00 Xác thực" {
+    usecase "Đăng nhập /\nĐăng ký /\nĐăng xuất" as UC_AUTH
+    usecase "Xác thực SQL" as UCS13 #EEEEEE
+    UC_AUTH ..> UCS13 : <<include>>
+  }
+
+  package "UC-04 Xem bản đồ & thống kê" {
+    usecase "Xem bản đồ\ntổng thể" as UC_MAP
+    usecase "Xem thống kê\nkhu vực" as UC_STAT
+  }
+
+  package "UC-01 Quản lý phiên bản" #FFF8E1 {
+    usecase "Chọn ngữ cảnh\n(Vùng-Tỉnh-Version)" as UC_SEL
+    usecase "Tạo phiên bản" as UC_NEW
+    usecase "Áp dụng phiên bản\n(Applied)" as UC_APP
+    usecase "Xóa phiên bản" as UC_DEL_VER
+    usecase "Sao lưu dữ liệu" as UCS3 #EEEEEE
+    usecase "1 Applied / tỉnh" as UCS11 #EEEEEE
+
+    UC_SEL ..> UC_MAP : <<include>>
+    UC_NEW ..> UCS3 : <<include>>
+    UC_DEL_VER ..> UCS3 : <<include>>
+    UC_APP ..> UCS3 : <<include>>
+    UC_APP ..> UCS11 : <<include>>
+  }
+
+  package "UC-02 Quản lý vùng" #E8F4FD {
+    usecase "Vẽ vùng mới" as UC_DRAW
+    usecase "Chỉnh sửa ranh giới" as UC_EDIT
+    usecase "Sửa thuộc tính vùng" as UC_ATTR
+    usecase "Cắt / Gộp vùng" as UC_CUT
+    usecase "Xóa vùng" as UC_DEL
+    usecase "Thao tác hàng loạt\n(Bulk)" as UC_BULK
+
+    usecase "Kiểm tra chồng lấn" as UCS1 #EEEEEE
+    usecase "Tính diện tích & tâm" as UCS2 #EEEEEE
+    usecase "Cắt/gộp PostGIS" as UCS10 #EEEEEE
+
+    UC_DRAW ..> UCS1 : <<include>>
+    UC_DRAW ..> UCS2 : <<include>>
+    UC_EDIT ..> UCS1 : <<include>>
+    UC_EDIT ..> UCS2 : <<include>>
+    UC_CUT ..> UCS1 : <<include>>
+    UC_CUT ..> UCS2 : <<include>>
+    UC_CUT ..> UCS10 : <<include>>
+    UC_DEL ..> UCS3 : <<include>>
+
+    UC_CUT <.. UC_BULK : <<extend>>
+    UC_DEL <.. UC_BULK : <<extend>>
+    UC_ATTR <.. UC_BULK : <<extend>>
+    UC_EDIT <.. UC_BULK : <<extend>>
+  }
+
+  package "UC-03 Tối ưu phân vùng" #F3E8FF {
+    usecase "Chạy thuật toán\nphân vùng (BGRASP)" as UC_RUN
+    usecase "Áp dụng phương án\ntối ưu" as UC_APPLY
+    usecase "Khóa chỉnh sửa\n(423)" as UCS4 #EEEEEE
+    usecase "Thực thi BGRASP\n(Worker)" as UCS5 #EEEEEE
+
+    UC_RUN ..> UCS4 : <<include>>
+    UC_RUN ..> UCS5 : <<include>>
+    UC_APPLY ..> UCS3 : <<include>>
+    UC_APPLY ..> UCS4 : <<include>>
+  }
+
+  package "UC-05 Driver" #E8F8E8 {
+    usecase "Xem lãnh thổ\nđược phân công" as UC_DRV_ZONE #lightgray
+  }
+}
+
+' --- Association (chỉ Admin, Driver) ---
+Admin --> UC_AUTH
+Admin --> UC_SEL
+Admin --> UC_NEW
+Admin --> UC_APP
+Admin --> UC_DEL_VER
+Admin --> UC_MAP
+Admin --> UC_STAT
+Admin --> UC_DRAW
+Admin --> UC_EDIT
+Admin --> UC_ATTR
+Admin --> UC_CUT
+Admin --> UC_DEL
+Admin --> UC_BULK
+Admin --> UC_RUN
+Admin --> UC_APPLY
+
+Driver --> UC_AUTH
+Driver --> UC_MAP
+Driver --> UC_STAT
+Driver ..> UC_DRV_ZONE
+
+note bottom of UCS1
+  UC xám = <<include>>,
+  không có actor riêng
+end note
+
+note as MAP_LEGEND
+  **Ánh xạ tổng quan → phân rã**
+  UC-00 → UC_AUTH
+  UC-01 → UC_SEL, UC_NEW, UC_APP, UC_DEL_VER
+  UC-02 → UC_DRAW … UC_BULK
+  UC-03 → UC_RUN, UC_APPLY
+  UC-04 → UC_MAP, UC_STAT
+  UC-05 → UC_DRV_ZONE
+end note
+
+@enduml

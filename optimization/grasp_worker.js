@@ -720,9 +720,16 @@ async function runGRASP(versionId, config) {
   try {
     await client.query("BEGIN");
 
+<<<<<<< Updated upstream
     const idUpdates = [];
     const colorUpdates = [];
     const globalAssigned = new Set(); // Global conflict check để ngăn đếm lặp 1 ô cho nhiều vùng
+=======
+  for (let i = 0; i < p; i++) {
+    const hue = (i * 137.5) % 360;
+    const color = hslToHex(hue, 75, 55);
+    let t = bestSolution[i];
+>>>>>>> Stashed changes
 
     for (let i = 0; i < p; i++) {
       const hue = (i * 360) / p;

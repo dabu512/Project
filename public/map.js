@@ -8,6 +8,12 @@ window.currentVersionId = null;
 window.currentVersionStatus = 'draft';
 window.geoJsonLayer = null;
 window.currentSelectedLayer = null; // Track polygon đang được highlight viền vàng
+window.tempPastedLayers = []; // Lưu các ô đa giác dán tạm thời chưa lưu vào DB
+window.isTempDragging = false;
+window.tempDragLastLatLng = null;
+window.tempDragInitialPositions = new Map();
+window.tempDragTotalDeltaLat = 0;
+window.tempDragTotalDeltaLng = 0;
 
 /** Xóa highlight viền vàng khỏi polygon đang chọn */
 window.clearSelectedPolygon = function() {
@@ -77,88 +83,339 @@ window.setCursorMode = function (mode) {
 // ================================================================
 //  PHÍM TẮT & PASTE LOGIC
 // ================================================================
+//  PHÍM TẮT & PASTE LOGIC
+// ================================================================
 window.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        if (window.isBulkSelectMode && window.selectedUnitsList.length > 0) {
+    // Nếu đang gõ trong input/textarea/select, bỏ qua phím tắt bản đồ
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') {
+        return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        let hasActiveSelection = (window.selectedUnitsList && window.selectedUnitsList.length > 0) || window.currentSelectedLayer;
+        if (hasActiveSelection) {
             window.copySelectedUnits();
+            e.preventDefault();
         }
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
         window.pasteUnits();
+        e.preventDefault();
     }
 });
 
+// Helper dịch chuyển toạ độ đa giác tránh đè lấn
+function shiftGeometry(geom, dLon, dLat) {
+    if (!geom) return null;
+    const cloned = JSON.parse(JSON.stringify(geom));
+    if (cloned.type === 'Polygon') {
+        cloned.coordinates = cloned.coordinates.map(ring => 
+            ring.map(coord => [coord[0] + dLon, coord[1] + dLat])
+        );
+    } else if (cloned.type === 'MultiPolygon') {
+        cloned.coordinates = cloned.coordinates.map(polygon => 
+            polygon.map(ring => 
+                ring.map(coord => [coord[0] + dLon, coord[1] + dLat])
+            )
+        );
+    }
+    return cloned;
+}
+
 window.pasteUnits = async function() {
+    if (!window.currentVersionId) {
+        return Swal.fire("Thông báo", "Vui lòng chọn Tỉnh và Phiên bản trước khi dán đa giác!", "warning");
+    }
+
+    let polygonsToPaste = null;
+
     try {
-        const text = await navigator.clipboard.readText();
-        if (!text || !text.includes('Đã chọn')) {
-            return Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Clipboard không chứa dữ liệu ô đa giác hợp lệ!', timer: 2000, showConfirmButton: false });
+        // Thử đọc từ Clipboard hệ thống trước
+        const text = await navigator.clipboard.readText().catch(() => null);
+        if (text) {
+            try {
+                const parsed = JSON.parse(text);
+                if (parsed && parsed.type === 'gis-polygons' && Array.isArray(parsed.polygons)) {
+                    polygonsToPaste = parsed.polygons;
+                }
+            } catch (_) {
+                // Clipboard không phải JSON
+            }
         }
-        
-        // Parse đơn giản (Ví dụ: thông báo là đã nhận dữ liệu)
-        // Trong thực tế có thể tạo mới ô dựa trên text nếu có tọa độ, 
-        // nhưng hiện tại copySelectedUnits chỉ copy text mô tả.
-        // Ta có thể dùng nó để "dán" thuộc tính vào các ô đang chọn.
-        
-        if (window.selectedUnitsList.length === 0) {
-            return Swal.fire("Thông báo", "Vui lòng chọn các ô mục tiêu để dán thuộc tính (Tên/Khách/Đơn).", "info");
-        }
+    } catch (e) {
+        console.warn("Không thể đọc clipboard hệ thống, dùng bộ nhớ đệm RAM", e);
+    }
 
-        const lines = text.split('\n');
-        const dataLine = lines.find(l => l.includes('Tên:'));
-        if (!dataLine) return;
+    // Fallback sang bộ nhớ RAM của tab hiện tại
+    if (!polygonsToPaste && window.copiedPolygonsData && window.copiedPolygonsData.length > 0) {
+        polygonsToPaste = window.copiedPolygonsData;
+    }
 
-        const nameMatch = dataLine.match(/Tên: (.*?) \|/);
-        const custMatch = dataLine.match(/Khách: (\d+)/);
-        const orderMatch = dataLine.match(/Đơn: (\d+)/);
-        const colorMatch = dataLine.match(/Màu: (#\w+)/);
+    if (!polygonsToPaste || polygonsToPaste.length === 0) {
+        return Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Không tìm thấy dữ liệu đa giác hợp lệ đã copy!', timer: 2500, showConfirmButton: false });
+    }
 
-        const newData = {
-            name: nameMatch ? nameMatch[1] : null,
-            customers: custMatch ? parseInt(custMatch[1]) : 0,
-            orders: orderMatch ? parseInt(orderMatch[1]) : 0,
-            color: colorMatch ? colorMatch[1] : null
-        };
+    const { isConfirmed } = await Swal.fire({
+        title: 'Dán ô đa giác tạm thời?',
+        html: `Bạn có muốn dán <b>${polygonsToPaste.length}</b> ô đa giác đã copy làm ô tạm thời không?<br>
+               <span style="font-size:12px; color:gray;">(Hệ thống tự động tịnh tiến lệch 80m về Đông Bắc. Bạn có thể kéo di chuyển các ô này đến vị trí mong muốn rồi bấm "Xác nhận chốt dán ô")</span>`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Đồng ý dán',
+        cancelButtonText: 'Hủy'
+    });
 
-        const { isConfirmed } = await Swal.fire({
-            title: 'Dán thuộc tính?',
-            html: `Áp dụng thông tin sau cho <b>${window.selectedUnitsList.length}</b> ô đang chọn:<br>
-                   - Tên: ${newData.name || 'Giữ nguyên'}<br>
-                   - Khách: ${newData.customers}<br>
-                   - Đơn: ${newData.orders}<br>
-                   - Màu: <span style="display:inline-block;width:12px;height:12px;background:${newData.color}"></span> ${newData.color || 'Giữ nguyên'}`,
-            icon: 'question',
-            showCancelButton: true,
-            confirmButtonText: 'Dán ngay'
+    if (!isConfirmed) return;
+
+    // Xóa các ô tạm cũ nếu có
+    if (window.tempPastedLayers && window.tempPastedLayers.length > 0) {
+        window.tempPastedLayers.forEach(l => {
+            if (typeof map !== 'undefined') map.removeLayer(l);
+        });
+        window.tempPastedLayers = [];
+        _cleanupTempGroupDrag();
+    }
+
+    // Tịnh tiến dịch chuyển toạ độ 0.0008 (~80-100 mét)
+    const shiftedPolygons = polygonsToPaste.map(poly => ({
+        ...poly,
+        geometry: shiftGeometry(poly.geometry, 0.0008, 0.0008)
+    }));
+
+    // Clear selected units to avoid conflicts
+    if (window.geoJsonLayer) {
+        window.geoJsonLayer.eachLayer(function (layer) {
+            const el = layer.getElement();
+            if (el) el.classList.remove('marching-ants-path');
+        });
+    }
+    window.selectedUnitsList = [];
+    window.isBulkSelectMode = true;
+
+    // Vẽ các ô tạm lên bản đồ (KHÔNG dùng Geoman - dùng group-drag thay thế)
+    shiftedPolygons.forEach(poly => {
+        const geojsonGroup = L.geoJSON(poly.geometry, {
+            style: {
+                color: '#2ecc71',
+                weight: 3,
+                dashArray: '5, 8',
+                fillOpacity: 0.35,
+                fillColor: '#2ecc71'
+            }
         });
 
-        if (!isConfirmed) return;
+        geojsonGroup.eachLayer(layer => {
+            // Lưu trữ thông tin nguyên bản
+            layer.options.polyData = {
+                name: poly.name,
+                color: poly.color || '#3388ff',
+                customer_count: poly.customer_count || poly.customers || 0,
+                order_count: poly.order_count || poly.orders || 0
+            };
 
-        document.getElementById('loading-screen').style.display = 'flex';
-        const updates = window.selectedUnitsList.map(id => ({
-            id,
-            name: newData.name,
-            customer_count: newData.customers,
-            order_count: newData.orders,
-            color: newData.color
-        }));
+            layer.addTo(map);
 
-        const res = await fetch('/api/units/bulk-attributes', {
+            // Gắn sự kiện mousedown lên từng temp layer để bắt đầu group-drag
+            layer.on('mousedown', function(e) {
+                L.DomEvent.stopPropagation(e);
+                window.isTempDragging = true;
+                window.tempDragLastLatLng = e.latlng;
+                map.dragging.disable(); // Tắt kéo bản đồ trong khi kéo nhóm
+                map.getContainer().style.cursor = 'grabbing';
+            });
+
+            window.tempPastedLayers.push(layer);
+        });
+    });
+
+    // Gắn sự kiện mousemove & mouseup trên map cho group-drag
+    // Chỉ gắn 1 lần, kiểm tra bằng flag
+    if (!window._tempGroupDragBound) {
+        window._tempGroupDragBound = true;
+
+        map.on('mousemove', function(e) {
+            if (!window.isTempDragging || !window.tempDragLastLatLng) return;
+            if (!window.tempPastedLayers || window.tempPastedLayers.length === 0) return;
+
+            const deltaLat = e.latlng.lat - window.tempDragLastLatLng.lat;
+            const deltaLng = e.latlng.lng - window.tempDragLastLatLng.lng;
+
+            // Di chuyển tất cả các layer tạm thời cùng lúc
+            window.tempPastedLayers.forEach(layer => {
+                const latlngs = layer.getLatLngs();
+                const shifted = _shiftLatLngs(latlngs, deltaLat, deltaLng);
+                layer.setLatLngs(shifted);
+            });
+
+            window.tempDragLastLatLng = e.latlng;
+        });
+
+        map.on('mouseup', function(e) {
+            if (window.isTempDragging) {
+                window.isTempDragging = false;
+                window.tempDragLastLatLng = null;
+                map.dragging.enable(); // Bật lại kéo bản đồ
+                map.getContainer().style.cursor = '';
+            }
+        });
+    }
+
+    // Mở panel quản lý chọn và hiển thị các nút thao tác dán
+    const bulkPanel = document.getElementById('bulk-action-panel');
+    if (bulkPanel) {
+        bulkPanel.style.display = 'flex';
+        if (!window.bulkPanelInitialized) {
+            window.initGenericPanel('bulk-action-panel', 'bulk-panel-drag-handle');
+            window.bulkPanelInitialized = true;
+        }
+    }
+
+    const tempPasteActions = document.getElementById('temp-paste-actions');
+    if (tempPasteActions) {
+        tempPasteActions.style.display = 'flex';
+    }
+
+    const countSpan = document.getElementById('bulk-count');
+    if (countSpan) {
+        countSpan.innerText = window.tempPastedLayers.length;
+    }
+
+    Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã dán ${window.tempPastedLayers.length} ô đa giác tạm thời! Kéo bất kỳ ô nào để di chuyển cả nhóm.`, timer: 4000, showConfirmButton: false });
+};
+
+// Hàm trợ giúp: dịch chuyển tọa độ LatLngs (hỗ trợ nested arrays cho Polygon/MultiPolygon)
+function _shiftLatLngs(latlngs, deltaLat, deltaLng) {
+    if (Array.isArray(latlngs[0]) && !(latlngs[0] instanceof L.LatLng)) {
+        // Nested array (e.g. polygon with holes, or multipolygon rings)
+        return latlngs.map(ring => _shiftLatLngs(ring, deltaLat, deltaLng));
+    }
+    return latlngs.map(ll => L.latLng(ll.lat + deltaLat, ll.lng + deltaLng));
+}
+
+// Hàm dọn dẹp trạng thái group-drag khi không còn temp layers
+function _cleanupTempGroupDrag() {
+    window.isTempDragging = false;
+    window.tempDragLastLatLng = null;
+    if (typeof map !== 'undefined') {
+        map.dragging.enable();
+        map.getContainer().style.cursor = '';
+    }
+}
+
+window.confirmPasteUnits = async function() {
+    if (!window.tempPastedLayers || window.tempPastedLayers.length === 0) {
+        return Swal.fire("Thông báo", "Không có ô tạm thời nào để chốt!", "info");
+    }
+
+    const { isConfirmed } = await Swal.fire({
+        title: 'Chốt dán ô đa giác?',
+        text: `Xác nhận lưu ${window.tempPastedLayers.length} ô đa giác vào bản đồ?`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Đồng ý chốt',
+        cancelButtonText: 'Hủy'
+    });
+
+    if (!isConfirmed) return;
+
+    document.getElementById('loading-screen').style.display = 'flex';
+
+    // Thu thập các geometry mới (đã kéo) và metadata từ temp layers
+    const polygonsToSave = [];
+    window.tempPastedLayers.forEach(layer => {
+        const geojson = layer.toGeoJSON();
+        const polyData = layer.options.polyData;
+        
+        polygonsToSave.push({
+            name: polyData.name,
+            color: polyData.color,
+            customer_count: polyData.customer_count,
+            order_count: polyData.order_count,
+            geometry: geojson.geometry
+        });
+    });
+
+    try {
+        const res = await fetch('/api/units/bulk-clone', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates })
+            body: JSON.stringify({
+                version_id: window.currentVersionId,
+                polygons: polygonsToSave
+            })
         });
         const data = await res.json();
         document.getElementById('loading-screen').style.display = 'none';
 
         if (data.success) {
-            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Đã dán thuộc tính thành công!', timer: 2000, showConfirmButton: false })
-                .then(() => location.reload());
+            Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã lưu thành công ${polygonsToSave.length} ô đa giác!`, timer: 2500, showConfirmButton: false });
+            
+            // Xóa các ô tạm khỏi bản đồ
+            window.tempPastedLayers.forEach(l => {
+                if (typeof map !== 'undefined') map.removeLayer(l);
+            });
+            window.tempPastedLayers = [];
+            _cleanupTempGroupDrag();
+
+            // Ẩn panel chốt
+            const tempPasteActions = document.getElementById('temp-paste-actions');
+            if (tempPasteActions) tempPasteActions.style.display = 'none';
+
+            if (window.cancelBulkMode) window.cancelBulkMode();
+
+            // Load lại bản đồ để hiện các ô chính thức từ DB
+            if (window.loadMapData) window.loadMapData(window.currentVersionId);
+        } else {
+            Swal.fire("Lỗi chốt dán đa giác", data.message || "Không thể dán", "error");
         }
     } catch (err) {
-        console.error("Paste error:", err);
+        document.getElementById('loading-screen').style.display = 'none';
+        console.error("Confirm paste error:", err);
+        Swal.fire("Lỗi kết nối", err.message, "error");
     }
 };
+
+window.cancelPasteUnits = function() {
+    if (!window.tempPastedLayers || window.tempPastedLayers.length === 0) return;
+
+    // Xóa các ô tạm khỏi bản đồ
+    window.tempPastedLayers.forEach(l => {
+        if (typeof map !== 'undefined') map.removeLayer(l);
+    });
+    window.tempPastedLayers = [];
+    _cleanupTempGroupDrag();
+
+    // Ẩn panel chốt
+    const tempPasteActions = document.getElementById('temp-paste-actions');
+    if (tempPasteActions) tempPasteActions.style.display = 'none';
+
+    if (window.cancelBulkMode) window.cancelBulkMode();
+
+    Swal.fire({ toast: true, position: 'top-end', icon: 'info', title: 'Đã hủy các ô dán tạm thời.', timer: 2000, showConfirmButton: false });
+};
+
+// Mở rộng/Wrap window.cancelBulkMode để dọn dẹp các ô tạm thời
+setTimeout(() => {
+    const originalCancelBulkMode = window.cancelBulkMode;
+    window.cancelBulkMode = function() {
+        if (typeof originalCancelBulkMode === 'function') {
+            originalCancelBulkMode();
+        }
+        
+        // Clear các ô tạm thời khỏi bản đồ
+        if (window.tempPastedLayers && window.tempPastedLayers.length > 0) {
+            window.tempPastedLayers.forEach(l => {
+                if (typeof map !== 'undefined') map.removeLayer(l);
+            });
+            window.tempPastedLayers = [];
+            _cleanupTempGroupDrag();
+        }
+        
+        const tempPasteActions = document.getElementById('temp-paste-actions');
+        if (tempPasteActions) {
+            tempPasteActions.style.display = 'none';
+        }
+    };
+}, 1000);
 
 // Hàm khởi tạo Panel (Kéo/Co giãn) dùng chung
 window.initGenericPanel = function(panelId, handleId) {
@@ -364,42 +621,68 @@ window.initGenericPanel = function(panelId, handleId) {
 })();
 
 // ================================================================
-//  COPY SELECTED UNITS
+//  COPY SELECTED UNITS (Hỗ trợ cả đơn lẻ và nhiều ô chọn)
 // ================================================================
 window.copySelectedUnits = function () {
-    if (!window.selectedUnitsList || window.selectedUnitsList.length === 0) {
-        Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: 'Chưa chọn ô nào!', timer: 2000, showConfirmButton: false });
+    let targetIds = [];
+    if (window.selectedUnitsList && window.selectedUnitsList.length > 0) {
+        targetIds = [...window.selectedUnitsList];
+    } else if (window.currentSelectedLayer) {
+        const singleId = window.currentSelectedLayer.options.id;
+        if (singleId) targetIds = [singleId];
+    }
+
+    if (targetIds.length === 0) {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'warning', title: 'Chưa chọn ô nào để copy!', timer: 2000, showConfirmButton: false });
         return;
     }
     if (!window.geoJsonLayer) return;
 
-    const lines = [];
-    lines.push(`Đã chọn ${window.selectedUnitsList.length} ô:`);
-    lines.push('---');
+    const copyData = [];
+    const textLines = [];
+    textLines.push(`Đã chọn ${targetIds.length} ô:`);
+    textLines.push('---');
 
     window.geoJsonLayer.eachLayer(function (layer) {
         const uid = layer.options.id;
-        if (!window.selectedUnitsList.includes(uid)) return;
-        // Lấy thông tin từ feature properties
+        if (!targetIds.includes(uid)) return;
         const f = layer.feature;
-        if (!f || !f.properties) return;
-        const p = f.properties;
-        const area = p.area ? p.area.toFixed(4) : '0';
-        lines.push(`Tên: ${p.name || 'N/A'} | ID: ${uid} | Khách: ${p.customers || 0} | Đơn: ${p.orders || 0} | Diện tích: ${area} km² | Màu: ${p.color || '#ccc'}`);
+        if (!f) return;
+        
+        copyData.push({
+            name: f.properties.name,
+            geometry: f.geometry,
+            customer_count: f.properties.customers || f.properties.customer_count || 0,
+            order_count: f.properties.orders || f.properties.order_count || 0,
+            color: f.properties.color || f.properties.zoneColor || '#3388ff'
+        });
+
+        const area = f.properties.area ? f.properties.area.toFixed(4) : '0';
+        textLines.push(`Tên: ${f.properties.name || 'N/A'} | ID: ${uid} | Khách: ${f.properties.customers || 0} | Đơn: ${f.properties.orders || 0} | Diện tích: ${area} km² | Màu: ${f.properties.color || '#ccc'}`);
     });
 
-    const text = lines.join('\n');
-    navigator.clipboard.writeText(text).then(() => {
-        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${window.selectedUnitsList.length} ô vào clipboard!`, timer: 2500, showConfirmButton: false });
+    // Lưu cục bộ trong bộ nhớ RAM
+    window.copiedPolygonsData = copyData;
+
+    // Lưu vào Clipboard dưới dạng JSON có ký hiệu riêng biệt
+    const clipboardPayload = {
+        type: 'gis-polygons',
+        polygons: copyData,
+        textSummary: textLines.join('\n')
+    };
+
+    const textToWrite = JSON.stringify(clipboardPayload);
+    navigator.clipboard.writeText(textToWrite).then(() => {
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${targetIds.length} ô đa giác (Ctrl+C)!`, timer: 2500, showConfirmButton: false });
     }).catch(() => {
-        // Fallback
+        // Fallback ghi text thô
         const ta = document.createElement('textarea');
-        ta.value = text;
+        ta.value = textLines.join('\n');
         document.body.appendChild(ta);
         ta.select();
         document.execCommand('copy');
         document.body.removeChild(ta);
-        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: 'Đã copy!', timer: 2000, showConfirmButton: false });
+        Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã copy ${targetIds.length} ô!`, timer: 2000, showConfirmButton: false });
     });
 };
 

@@ -1,0 +1,157 @@
+@startuml UC_Project_anti_Detailed
+' Use Case chi tiết — Actor: Admin, Driver
+' Include (xám) = logic bắt buộc theo đặc tả UC.
+' Extend (nét đứt) = nhánh/biến thể theo điều kiện người dùng chọn.
+left to right direction
+skinparam packageStyle rectangle
+skinparam linetype orthogonal
+skinparam nodesep 20
+skinparam ranksep 30
+
+title Use Case — Hệ thống GIS Lãnh thổ (Project_anti)
+
+actor "Admin" as Admin
+actor "Driver" as Driver
+
+rectangle "Hệ thống GIS Lãnh thổ" {
+
+  package "Xác thực" {
+    usecase "Đăng nhập /\nĐăng ký /\nĐăng xuất" as UC_AUTH
+    usecase "Xác thực\nSQL" as UCS13 #EEEEEE
+    UC_AUTH ..> UCS13 : <<include>>
+  }
+
+  package "Xem bản đồ & thông tin" {
+    usecase "Xem bản đồ\ntổng thể" as UC_MAP
+    usecase "Xem thông tin đa giác\n(diện tích/khách/đơn/màu + form sửa)" as UC_STAT
+  }
+
+  package "Phiên bản bản đồ" #FFF8E1 {
+    usecase "Chọn ngữ cảnh\n(Vùng-Tỉnh-Version)" as UC_SEL
+    usecase "Tạo phiên bản\n(draft/copy)" as UC_NEW
+    usecase "Áp dụng phiên bản\n(Applied)" as UC_APP
+    usecase "Xóa phiên bản" as UC_DEL_VER
+
+    usecase "Sao lưu\ndữ liệu" as UCS3 #EEEEEE
+    usecase "1 Applied/tỉnh" as UCS11 #EEEEEE
+
+    UC_SEL ..> UC_MAP : <<include>>
+    UC_NEW ..> UCS3 : <<include>>
+    UC_DEL_VER ..> UCS3 : <<include>>
+    UC_APP ..> UCS3 : <<include>>
+    UC_APP ..> UCS11 : <<include>>
+  }
+
+  package "Quản lý đa giác/vùng" #E8F4FD {
+    usecase "Vẽ vùng mới\n(tạo polygon basic unit)" as UC_DRAW
+    usecase "Chỉnh sửa\nranh giới (geom)" as UC_EDIT
+    usecase "Sửa thuộc tính\npolygon (name/customers/orders/color)" as UC_ATTR
+    usecase "Cắt / Gộp vùng" as UC_CUT
+    usecase "Xóa polygon" as UC_DEL
+
+    usecase "Kiểm tra\nchồng lấn" as UCS1 #EEEEEE
+    usecase "Tính diện tích\n& tâm vùng" as UCS2 #EEEEEE
+    usecase "Cắt/gộp\nPostGIS" as UCS10 #EEEEEE
+
+    UC_DRAW ..> UCS1 : <<include>>
+    UC_DRAW ..> UCS2 : <<include>>
+    UC_EDIT ..> UCS1 : <<include>>
+    UC_EDIT ..> UCS2 : <<include>>
+    UC_CUT ..> UCS1 : <<include>>
+    UC_CUT ..> UCS2 : <<include>>
+    UC_CUT ..> UCS10 : <<include>>
+    UC_DEL ..> UCS3 : <<include>>
+
+    ' UC-EDIT/UC-DRAW/UC-CUT chỉ được thực thi khi version không bị khóa bởi tối ưu (UCS4).
+    ' UC-STAT là tiền điều kiện để mở form sửa thuộc tính.
+    UC_ATTR ..> UC_STAT : <<include>>
+
+    ' Trong UC-DRAW: nếu Geoman tạo "Line" thì chuyển nhánh Split (thuộc UC-CUT).
+    UC_CUT <.. UC_DRAW : <<extend>>
+  }
+
+  package "Bulk thao tác hàng loạt" #EDE6FF {
+    usecase "Bulk thao tác hàng loạt" as UC_BULK
+    usecase "Phân bổ thông minh\n(customers/orders)" as UC_BULK_SMART_DISTRIBUTE
+    usecase "Tô màu ngẫu nhiên\n(bulk colors)" as UC_BULK_RANDOM_COLORS
+    usecase "Gộp (merge)\n(bulk merge)" as UC_BULK_MERGE
+    usecase "Xóa nhiều\n(bulk delete)" as UC_BULK_DELETE
+
+    ' Nhánh biến thể khi Admin chọn action trong bulk panel.
+    UC_BULK_SMART_DISTRIBUTE <.. UC_BULK : <<extend>>
+    UC_BULK_RANDOM_COLORS <.. UC_BULK : <<extend>>
+    UC_BULK_MERGE <.. UC_BULK : <<extend>>
+    UC_BULK_DELETE <.. UC_BULK : <<extend>>
+
+    ' Bulk merge dẫn tới thay đổi hình học; dùng các logic tương tự UC-CUT.
+    UC_BULK_MERGE ..> UCS1 : <<include>>
+    UC_BULK_MERGE ..> UCS2 : <<include>>
+    UC_BULK_MERGE ..> UCS10 : <<include>>
+
+    ' Bulk delete thuộc họ UC-DEL về sao lưu dữ liệu (UCS3).
+    UC_BULK_DELETE ..> UCS3 : <<include>>
+  }
+
+  package "Tối ưu phân vùng\n(BGRASP)" #F3E8FF {
+    usecase "Chạy thuật toán\nphân vùng (BGRASP)" as UC_RUN
+    usecase "Áp dụng phương án\ntối ưu (Apply/Discard)" as UC_APPLY
+
+    usecase "Khóa chỉnh sửa\nkhi tối ưu" as UCS4 #EEEEEE
+    usecase "Thực thi\nBGRASP (Worker)" as UCS5 #EEEEEE
+
+    UC_RUN ..> UCS4 : <<include>>
+    UC_RUN ..> UCS5 : <<include>>
+    UC_APPLY ..> UCS3 : <<include>>
+    UC_APPLY ..> UCS4 : <<include>>
+  }
+
+  package "Tuyến Driver" #E8F8E8 {
+    usecase "Xem lãnh thổ\nđược phân công (legacy)" as UC_DRV_ZONE #lightgray
+  }
+}
+
+' Liên kết Actor → Use case (nhấn vào các use case mà actor chủ động kích hoạt).
+Admin ---> UC_AUTH
+Admin ---> UC_SEL
+Admin ---> UC_NEW
+Admin ---> UC_APP
+Admin ---> UC_DEL_VER
+Admin ---> UC_MAP
+Admin ---> UC_STAT
+
+Admin ---> UC_DRAW
+Admin ---> UC_EDIT
+Admin ---> UC_ATTR
+Admin ---> UC_CUT
+Admin ---> UC_DEL
+
+Admin ---> UC_BULK
+
+Admin ---> UC_RUN
+Admin ---> UC_APPLY
+
+Driver ---> UC_AUTH
+Driver ---> UC_MAP
+Driver ---> UC_STAT
+Driver --> UC_DRV_ZONE
+
+' Logic điều hướng từ luồng legacy Driver.
+UC_DRV_ZONE ..> UC_STAT : <<include>>
+
+note right of UC_APP
+  Áp dụng phiên bản:
+  đảm bảo mỗi tỉnh chỉ có 1 version status='applied'.
+end note
+
+note right of UC_RUN
+  UC-RUN:
+  lock version, spawn grasp_worker.js,
+  poll trạng thái job và preview phương án.
+end note
+
+note bottom of UCS4
+  Chặn vẽ/sửa/xóa vùng
+  khi tối ưu đang chạy (is_optimizing=true).
+end note
+
+@enduml

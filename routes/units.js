@@ -39,10 +39,11 @@ router.get("/", async (req, res) => {
       return res.json({ type: "FeatureCollection", features: [] });
     }
 
-    // Truy vấn trực tiếp từ basic_units không tham chiếu đến bảng districts không tồn tại
+    // Truy vấn trực tiếp từ basic_units, JOIN thêm bảng users để lấy tên tài xế
     let query = `
-            SELECT bu.*, ST_AsGeoJSON(bu.geom)::json as geometry
+            SELECT bu.*, ST_AsGeoJSON(bu.geom)::json as geometry, u.full_name as driver_name
             FROM basic_units bu
+            LEFT JOIN users u ON bu.driver_id = u.id
             WHERE bu.version_id = $1
         `;
     let params = [targetVersionId];
@@ -62,7 +63,10 @@ router.get("/", async (req, res) => {
         districtId: null,
         districtName: null,
         districtColor: null,
-        driverId: null
+        driverId: row.driver_id || null,
+        driverName: row.driver_name || null,
+        is_my_zone: (driverId && parseInt(driverId) === row.driver_id) ? true : false,
+        is_partitioned: row.is_partitioned === true
       },
       geometry: row.geometry,
     }));
@@ -136,7 +140,26 @@ router.post("/", async (req, res) => {
       color || "#3388ff",
       version_id,
     ]);
-    res.json({ success: true, id: result.rows[0].id });
+    const newUnitId = result.rows[0].id;
+
+    // Tự động tính toán các ô tiếp giáp cho ô mới này (lũy tiến)
+    await pool.query(`
+        INSERT INTO unit_adjacencies (unit_a_id, unit_b_id, version_id)
+        SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id), $1
+        FROM basic_units a
+        JOIN basic_units b ON a.id != b.id AND a.version_id = b.version_id
+        WHERE a.version_id = $1 AND (a.id = $2 OR b.id = $2)
+          AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+          AND ST_Area(
+              ST_Intersection(
+                  ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                  ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+              )
+          ) > 0.1
+        ON CONFLICT DO NOTHING
+    `, [version_id, newUnitId]).catch(err => console.error("Lỗi khi tính toán kề cận ô mới:", err.message));
+
+    res.json({ success: true, id: newUnitId });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -221,6 +244,8 @@ router.post("/split", async (req, res) => {
     }
 
     if (splitCount > 0) {
+      // Xóa ma trận kề của version này để hệ thống tính lại ở lần tối ưu tiếp theo
+      await pool.query("DELETE FROM unit_adjacencies WHERE version_id = $1", [version_id]).catch(err => console.error(err));
       res.json({
         success: true,
         message: `Đã cắt thành công ${splitCount} hình.`,
@@ -346,6 +371,9 @@ router.post("/merge", async (req, res) => {
       version_id,
     ]);
 
+    // Xóa ma trận kề của version này để hệ thống tính lại ở lần tối ưu tiếp theo
+    await client.query("DELETE FROM unit_adjacencies WHERE version_id = $1", [version_id]);
+
     await client.query("COMMIT");
     res.json({ success: true, message: "Hợp nhất thành công" });
   } catch (err) {
@@ -402,6 +430,26 @@ router.post("/bulk-update", async (req, res) => {
           `Cập nhật hàng loạt thất bại: Ô bị chồng lấn lên "${overlapRes.rows[0].name}"!`,
         );
       }
+    }
+
+    const updatedIds = updates.map(u => u.id);
+    if (updatedIds.length > 0) {
+      await client.query("DELETE FROM unit_adjacencies WHERE unit_a_id = ANY($1::int[]) OR unit_b_id = ANY($1::int[])", [updatedIds]);
+      await client.query(`
+          INSERT INTO unit_adjacencies (unit_a_id, unit_b_id, version_id)
+          SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id), $1
+          FROM basic_units a
+          JOIN basic_units b ON a.id != b.id AND a.version_id = b.version_id
+          WHERE a.version_id = $1 AND (a.id = ANY($2::int[]) OR b.id = ANY($2::int[]))
+            AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+            AND ST_Area(
+                ST_Intersection(
+                    ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                    ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+                )
+            ) > 0.1
+          ON CONFLICT DO NOTHING
+      `, [version_id, updatedIds]);
     }
 
     await client.query("COMMIT");
@@ -468,6 +516,34 @@ router.put("/:id", async (req, res) => {
     }
 
     res.json({ success: true, message: "Lưu thành công!" });
+
+    // Cập nhật kề cận lũy tiến nếu thay đổi ranh giới (geometry)
+    if (geometry) {
+      try {
+        await pool.query("DELETE FROM unit_adjacencies WHERE unit_a_id = $1 OR unit_b_id = $1", [id]);
+        const uRes = await pool.query("SELECT version_id FROM basic_units WHERE id = $1", [id]);
+        if (uRes.rows.length > 0) {
+          const versionId = uRes.rows[0].version_id;
+          await pool.query(`
+              INSERT INTO unit_adjacencies (unit_a_id, unit_b_id, version_id)
+              SELECT LEAST(a.id, b.id), GREATEST(a.id, b.id), $1
+              FROM basic_units a
+              JOIN basic_units b ON a.id != b.id AND a.version_id = b.version_id
+              WHERE a.version_id = $1 AND (a.id = $2 OR b.id = $2)
+                AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+                AND ST_Area(
+                    ST_Intersection(
+                        ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                        ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+                    )
+                ) > 0.1
+              ON CONFLICT DO NOTHING
+          `, [versionId, id]);
+        }
+      } catch (adjErr) {
+        console.error("Lỗi khi cập nhật kề cận ô sửa:", adjErr.message);
+      }
+    }
   } catch (err) {
     console.error("LỖI SQL:", err.message);
     res.status(500).json({ success: false, message: "Lỗi hệ thống khi lưu." });
@@ -520,6 +596,9 @@ router.put("/:id/attributes", async (req, res) => {
 // Đảm bảo các cột cần thiết tồn tại
 pool
   .query("ALTER TABLE basic_units ADD COLUMN IF NOT EXISTS color VARCHAR(20)")
+  .catch(() => {});
+pool
+  .query("ALTER TABLE basic_units ADD COLUMN IF NOT EXISTS is_partitioned BOOLEAN DEFAULT FALSE")
   .catch(() => {});
 
 // --- 7. TẠO BẢNG LÂN CẬN (PRE-CALCULATE ADJACENCY MATRIX CHO GRASP) ---
@@ -623,6 +702,9 @@ router.post("/bulk-clone", async (req, res) => {
       insertedIds.push(insertRes.rows[0].id);
     }
     
+    // Xóa ma trận kề của version này để hệ thống tính lại ở lần tối ưu tiếp theo
+    await client.query("DELETE FROM unit_adjacencies WHERE version_id = $1", [version_id]);
+
     await client.query("COMMIT");
     res.json({ success: true, insertedIds, message: `Đã dán thành công ${polygons.length} ô đa giác.` });
   } catch (err) {
@@ -630,6 +712,47 @@ router.post("/bulk-clone", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   } finally {
     client.release();
+  }
+});
+
+// --- 9. PHÂN CÔNG TÀI XẾ CHO VÙNG (POST) ---
+router.post("/assign-driver", async (req, res) => {
+  const { driver_id, unit_ids, version_id } = req.body;
+  try {
+    if (!version_id) {
+      return res.status(400).json({ success: false, message: "Thiếu version_id" });
+    }
+    if (!unit_ids || !Array.isArray(unit_ids) || unit_ids.length === 0) {
+      return res.status(400).json({ success: false, message: "Danh sách ô đa giác không hợp lệ" });
+    }
+    
+    await pool.query("BEGIN");
+    
+    if (driver_id) {
+      // B1: Gỡ bỏ driver_id này khỏi tất cả các ô đa giác thuộc version_id này (Đảm bảo mỗi tài xế chỉ gán 1 vùng)
+      await pool.query(
+        "UPDATE basic_units SET driver_id = NULL WHERE version_id = $1 AND driver_id = $2",
+        [parseInt(version_id), parseInt(driver_id)]
+      );
+      
+      // B2: Cập nhật driver_id cho các ô đa giác được chọn
+      await pool.query(
+        "UPDATE basic_units SET driver_id = $1 WHERE id = ANY($2)",
+        [parseInt(driver_id), unit_ids.map(id => parseInt(id))]
+      );
+    } else {
+      // Hủy gán tài xế cho vùng
+      await pool.query(
+        "UPDATE basic_units SET driver_id = NULL WHERE id = ANY($1)",
+        [unit_ids.map(id => parseInt(id))]
+      );
+    }
+    
+    await pool.query("COMMIT");
+    res.json({ success: true, message: "Phân công tài xế thành công!" });
+  } catch (err) {
+    await pool.query("ROLLBACK");
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 

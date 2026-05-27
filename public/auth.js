@@ -68,8 +68,12 @@ function checkLogin() {
   const user = JSON.parse(localStorage.getItem("user"));
   if (user) {
     document.getElementById("auth-overlay").style.display = "none";
+    let profileBtn = '';
+    if (user.role === 'driver') {
+      profileBtn = `<a href="#" onclick="window.showDriverProfileModal()" style="margin-right: 10px; color: #007bff; font-weight: bold;"><i class="fa-solid fa-user-gear"></i> Hồ sơ</a> | `;
+    }
     document.getElementById("user-info").innerHTML =
-      `Chào, <b>${user.full_name}</b> (${user.role}) | <a href="#" onclick="logout()">Thoát</a>`;
+      `Chào, <b>${user.full_name}</b> (${user.role}) | ${profileBtn}<a href="#" onclick="logout()">Thoát</a>`;
     return user;
   }
   return null;

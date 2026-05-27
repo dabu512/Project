@@ -129,6 +129,8 @@ window.saveAdminAttributes = function (id) {
             layer.feature.properties.customers = customers;
             layer.feature.properties.orders = orders;
             layer.feature.properties.color = color;
+            layer.feature.properties.customer_count = customers;
+            layer.feature.properties.order_count = orders;
 
             // 2. Cập nhật màu trên bản đồ
             layer.setStyle({
@@ -139,6 +141,20 @@ window.saveAdminAttributes = function (id) {
             updateSidebarStats(layer.feature.properties);
           }
         });
+
+        // 4. Đồng bộ dữ liệu vào danh sách in-memory phía dưới để tránh dùng dữ liệu cũ
+        if (window.originalUnitsList) {
+          const uIdx = window.originalUnitsList.findIndex(u => u.id == id);
+          if (uIdx > -1) {
+            window.originalUnitsList[uIdx].name = name;
+            window.originalUnitsList[uIdx].customer_count = customers;
+            window.originalUnitsList[uIdx].order_count = orders;
+            window.originalUnitsList[uIdx].color = color;
+          }
+        }
+        if (window.renderDistrictManagementList) {
+          window.renderDistrictManagementList(window.originalUnitsList, true);
+        }
       } else {
         Swal.fire("Lỗi", data.message || "Lỗi lưu dữ liệu", "error");
       }
@@ -199,6 +215,16 @@ window.currentSortDirection = "desc";
 window.originalUnitsList = [];
 
 window.renderDistrictManagementList = async function (units, isSortingAction = false) {
+  const currentU = typeof currentUser !== 'undefined' ? currentUser : (typeof checkLogin === 'function' ? checkLogin() : null);
+  if (!currentU || currentU.role !== 'admin') {
+    const panel = document.getElementById("bottom-management-panel");
+    if (panel) {
+      panel.style.display = "none";
+      panel.classList.remove("active");
+    }
+    return;
+  }
+
   const listDiv = document.getElementById("district-management-list");
   if (!listDiv) return;
 
@@ -313,6 +339,12 @@ window.renderDistrictManagementList = async function (units, isSortingAction = f
         const ordB = b.order_count ?? b.orders ?? 0;
         valA = custA > 0 ? ordA / custA : 0;
         valB = custB > 0 ? ordB / custB : 0;
+      } else if (window.currentSortBy === "color") {
+        valA = (a.color || "#cccccc").toLowerCase();
+        valB = (b.color || "#cccccc").toLowerCase();
+        return window.currentSortDirection === "asc"
+          ? valA.localeCompare(valB)
+          : valB.localeCompare(valA);
       }
 
       if (valA < valB) return window.currentSortDirection === "asc" ? -1 : 1;
@@ -340,7 +372,7 @@ window.renderDistrictManagementList = async function (units, isSortingAction = f
                           return `
                         <div class="district-list-item horizontal-card" data-unit-id="${u.id}" onclick="window.highlightPolygonOnMap(${u.id})">
                             <div class="district-info">
-                                <input type="checkbox" class="dist-checkbox" value="${u.id}" style="width: 18px; height: 18px; cursor:pointer;" onchange="window.updateCheckAllState()">
+                                 <input type="checkbox" class="dist-checkbox" value="${u.id}" ${window.selectedUnitsList && window.selectedUnitsList.includes(u.id) ? 'checked' : ''} style="width: 18px; height: 18px; cursor:pointer;" onchange="window.updateCheckAllState()">
                                 <div class="district-color-box" style="background-color: ${color}; width: 24px; height: 24px; border-radius: 4px; flex-shrink:0;"></div>
                                 <div class="unit-text-info">
                                     <span class="district-name-text">${u.name}</span>
@@ -431,7 +463,7 @@ window.highlightPolygonOnMap = function (unitId) {
 
   if (targetLayer) {
     // 1. Zoom đến đa giác (nếu không đang trong tầm nhìn)
-    map.fitBounds(targetLayer.getBounds(), { padding: [50, 50], maxZoom: 16 });
+    map.fitBounds(targetLayer.getBounds(), { padding: [50, 50], maxZoom: 11 });
 
     // 2. Kích hoạt sự kiện click giả lập để hiện panel thông tin
     // Lưu ý: targetLayer.fire('click') sẽ chạy logic trong map.js
@@ -1502,17 +1534,64 @@ window.updateCheckAllState = function () {
     checkAll.checked = Array.from(checkboxes).every((cb) => cb.checked);
   }
 
-  // Cập nhật selectedUnitsList
+  // Cập nhật selectedUnitsList và đồng bộ viền kiến bò lên bản đồ
   checkboxes.forEach((cb) => {
     const id = parseInt(cb.value);
     const idx = window.selectedUnitsList.indexOf(id);
-    if (cb.checked && idx === -1) window.selectedUnitsList.push(id);
-    else if (!cb.checked && idx > -1) window.selectedUnitsList.splice(idx, 1);
+    if (cb.checked) {
+      if (idx === -1) window.selectedUnitsList.push(id);
+      if (window.geoJsonLayer) {
+        window.geoJsonLayer.eachLayer((l) => {
+          if (l.options && l.options.id == id && l.getElement && l.getElement()) {
+            l.getElement().classList.add("marching-ants-path");
+          }
+        });
+      }
+    } else {
+      if (idx > -1) window.selectedUnitsList.splice(idx, 1);
+      if (window.geoJsonLayer) {
+        window.geoJsonLayer.eachLayer((l) => {
+          if (l.options && l.options.id == id && l.getElement && l.getElement()) {
+            l.getElement().classList.remove("marching-ants-path");
+          }
+        });
+      }
+    }
   });
 
   const countSpan = document.getElementById("bulk-count");
   if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
 
+  const panel = document.getElementById("bulk-action-panel");
+  if (panel) {
+    panel.style.display = window.selectedUnitsList.length > 0 ? "flex" : "none";
+    window.isBulkSelectMode = window.selectedUnitsList.length > 0;
+  }
+};
+
+/** Đồng bộ một chiều từ selectedUnitsList sang các checkbox DOM dưới chân trang */
+window.syncSelectedCheckboxes = function () {
+  const checkboxes = document.querySelectorAll(".dist-checkbox");
+  checkboxes.forEach((cb) => {
+    const id = parseInt(cb.value);
+    if (window.selectedUnitsList && window.selectedUnitsList.includes(id)) {
+      cb.checked = true;
+    } else {
+      cb.checked = false;
+    }
+  });
+
+  // Cập nhật trạng thái nút Chọn tất cả
+  const checkAll = document.getElementById("checkAllUnits");
+  if (checkAll && checkboxes.length > 0) {
+    checkAll.checked = Array.from(checkboxes).every((cb) => cb.checked);
+  }
+
+  // Cập nhật số lượng trên panel
+  const countSpan = document.getElementById("bulk-count");
+  if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
+
+  // Hiện panel bulk action nếu có đa giác được chọn
   const panel = document.getElementById("bulk-action-panel");
   if (panel) {
     panel.style.display = window.selectedUnitsList.length > 0 ? "flex" : "none";
@@ -1555,6 +1634,54 @@ window.toggleStatsPanel = function () {
     if (!window.statsPanelInitialized) {
       window.initStatsPanelEvents();
       window.statsPanelInitialized = true;
+    }
+  }
+};
+
+// Toggle mở rộng / thu gọn bảng Thông số vùng
+window._statsExpandedState = null; // lưu vị trí & kích thước trước khi expand
+window.toggleStatsExpand = function () {
+  const panel = document.getElementById("stats-summary-panel");
+  const btn = document.getElementById("stats-expand-btn");
+  if (!panel) return;
+
+  const isExpanded = panel.classList.contains("stats-expanded");
+
+  if (!isExpanded) {
+    // LƯU vị trí và kích thước hiện tại trước khi expand
+    window._statsExpandedState = {
+      width: panel.style.width,
+      height: panel.style.height,
+      left: panel.style.left,
+      top: panel.style.top,
+      right: panel.style.right,
+    };
+    // Xóa inline position để CSS class .stats-expanded hoạt động
+    panel.style.left = "";
+    panel.style.top = "";
+    panel.style.right = "";
+    panel.style.width = "";
+    panel.style.height = "";
+    panel.classList.add("stats-expanded");
+    if (btn) {
+      btn.title = "Thu gọn";
+      btn.innerHTML = '<i class="fa-solid fa-compress"></i>';
+    }
+  } else {
+    // KHÔI PHỤC vị trí cũ
+    panel.classList.remove("stats-expanded");
+    if (window._statsExpandedState) {
+      const s = window._statsExpandedState;
+      panel.style.width = s.width || "";
+      panel.style.height = s.height || "";
+      panel.style.left = s.left || "";
+      panel.style.top = s.top || "";
+      panel.style.right = s.right || "";
+      window._statsExpandedState = null;
+    }
+    if (btn) {
+      btn.title = "Mở rộng";
+      btn.innerHTML = '<i class="fa-solid fa-expand"></i>';
     }
   }
 };
@@ -1668,9 +1795,39 @@ window.updateStatsPanel = async function () {
       return;
     }
 
+    // Xác định các đa giác được chọn để phân chia (phân vùng)
+    let activeIds = null;
+    if (window.currentOptimOptions) {
+      const firstOpt = window.currentOptimOptions[0];
+      if (firstOpt && firstOpt.assignments) {
+        activeIds = Object.keys(firstOpt.assignments).map(Number);
+      }
+    }
+
+    const hasAnyPartitioned = data.features.some(f => f.properties && (f.properties.is_partitioned === true || f.properties.is_partitioned === 'true'));
+
+    let displayFeatures = data.features;
+    if (activeIds) {
+      displayFeatures = displayFeatures.filter(f => {
+        const uid = parseInt(f.id || f.properties.id);
+        return activeIds.includes(uid);
+      });
+    } else if (hasAnyPartitioned) {
+      // Chỉ hiện các đa giác đã được phân vùng
+      displayFeatures = displayFeatures.filter(f => {
+        return f.properties && (f.properties.is_partitioned === true || f.properties.is_partitioned === 'true');
+      });
+    }
+
+    if (displayFeatures.length === 0) {
+      contentDiv.innerHTML =
+        '<p class="empty-msg">Không có ô đa giác nào được chọn để thống kê.</p>';
+      return;
+    }
+
     // Nhóm các ô đa giác theo màu sắc (mỗi màu đại diện cho 1 vùng)
     const statsMap = {};
-    data.features.forEach((f) => {
+    displayFeatures.forEach((f) => {
       const color = f.properties.color || "#3388ff";
       if (!statsMap[color]) {
         statsMap[color] = {
@@ -1678,11 +1835,19 @@ window.updateStatsPanel = async function () {
           polygonCount: 0,
           customerCount: 0,
           orderCount: 0,
+          driverId: null,
+          driverName: null,
+          unitIds: []
         };
       }
       statsMap[color].polygonCount++;
       statsMap[color].customerCount += parseInt(f.properties.customers) || 0;
       statsMap[color].orderCount += parseInt(f.properties.orders) || 0;
+      statsMap[color].unitIds.push(f.id || f.properties.id);
+      if (f.properties.driverId) {
+        statsMap[color].driverId = f.properties.driverId;
+        statsMap[color].driverName = f.properties.driverName;
+      }
     });
 
     const summary = Object.values(statsMap);
@@ -1697,20 +1862,38 @@ window.updateStatsPanel = async function () {
         totalPolygons += s.polygonCount;
         totalCustomers += s.customerCount;
         totalOrders += s.orderCount;
+        
+        const driverText = s.driverName 
+          ? `<span style="color: #2ecc71; font-weight: bold;"><i class="fa-solid fa-user-check"></i> ${s.driverName}</span>` 
+          : `<span style="color: #e74c3c; font-style: italic;"><i class="fa-solid fa-user-slash"></i> Chưa gán</span>`;
+        
+        const assignBtn = `
+          <button class="btn-blue" 
+                  style="padding: 4px 8px; font-size: 11px; font-weight: bold; border-radius: 4px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; margin: 0; height: auto;" 
+                  onclick="window.showAssignDriverModal('${s.color}', ${JSON.stringify(s.unitIds)})">
+            <i class="fa-solid fa-user-pen"></i> Gán
+          </button>
+        `;
+        
         return `
         <tr>
-          <td><span class="color-indicator" style="background-color: ${
-            s.color
-          }"></span> Vùng ${idx + 1}</td>
-          <td class="stat-value">${s.polygonCount}</td>
-          <td class="stat-value">${s.orderCount}</td>
-          <td class="stat-value">${s.customerCount}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd;"><span class="color-indicator" style="background-color: ${s.color}"></span> Vùng ${idx + 1}</td>
+          <td class="stat-value" style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">${s.polygonCount}</td>
+          <td class="stat-value" style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">${s.orderCount}</td>
+          <td class="stat-value" style="padding: 8px; border-bottom: 1px solid #ddd; text-align: right;">${s.customerCount}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd; font-size: 12px; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${driverText}</td>
+          <td style="padding: 8px; border-bottom: 1px solid #ddd; text-align: center;">${assignBtn}</td>
         </tr>
       `;
       })
       .join("");
 
     contentDiv.innerHTML = `
+      <div style="padding: 10px 10px 0 10px; display: flex; gap: 8px;">
+        <button class="btn-blue" style="width: 100%; height: 36px; font-weight: bold; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; margin: 0; background-color: #27ae60;" onclick="window.showRandomAssignDriversModal()">
+          <i class="fa-solid fa-shuffle"></i> Gán ngẫu nhiên tài xế
+        </button>
+      </div>
       <div class="opt-summary-totals" style="margin: 10px; background: white;">
         <div class="opt-total-item">
           <span class="opt-total-label">Vùng</span>
@@ -1728,10 +1911,12 @@ window.updateStatsPanel = async function () {
       <table class="opt-results-table" style="width: 100%; border-collapse: collapse;">
         <thead>
           <tr>
-            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 10px; border-bottom: 2px solid #ddd; text-align: left; color: #555;">Vùng</th>
-            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 10px; border-bottom: 2px solid #ddd; text-align: left; color: #555;">Ô</th>
-            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 10px; border-bottom: 2px solid #ddd; text-align: left; color: #555;">Đơn</th>
-            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 10px; border-bottom: 2px solid #ddd; text-align: left; color: #555;">Khách</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: left; color: #555; font-size: 12px;">Vùng</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: right; color: #555; font-size: 12px;">Ô</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: right; color: #555; font-size: 12px;">Đơn</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: right; color: #555; font-size: 12px;">Khách</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: left; color: #555; font-size: 12px;">Tài xế</th>
+            <th style="position: sticky; top: 0; background: #f8f9fa; z-index: 15; padding: 8px; border-bottom: 2px solid #ddd; text-align: center; color: #555; font-size: 12px;">Hành động</th>
           </tr>
         </thead>
         <tbody>
@@ -1813,4 +1998,299 @@ document.addEventListener("click", () => {
     dropdown.classList.remove("show");
   }
 });
+
+// ============================================================
+// HÀM HIỂN THỊ MODAL GÁN TÀI XẾ CHO VÙNG
+// ============================================================
+window.showAssignDriverModal = async function(color, unitIds) {
+  const provinceSelect = document.getElementById("province-select");
+  if (!provinceSelect) {
+    Swal.fire("Lỗi", "Không tìm thấy selector tỉnh thành!", "error");
+    return;
+  }
+  const provinceId = provinceSelect.value;
+  if (!provinceId) {
+    Swal.fire("Lỗi", "Vui lòng chọn Tỉnh/Thành phố trước!", "error");
+    return;
+  }
+  
+  try {
+    // Gọi API lấy các driver thuộc tỉnh này và chưa được gán cho vùng nào khác trong version hiện tại
+    const res = await fetch(`/api/drivers?province_id=${provinceId}&version_id=${window.currentVersionId}`);
+    const result = await res.json();
+    
+    if (!result.success) {
+      throw new Error(result.message || "Không thể tải danh sách tài xế");
+    }
+    
+    const drivers = result.data || [];
+    let optionsHtml = `<option value="">-- Hủy phân công / Chưa gán --</option>`;
+    drivers.forEach(d => {
+      optionsHtml += `<option value="${d.id}">${d.full_name} (${d.username})</option>`;
+    });
+    
+    const { value: driverId } = await Swal.fire({
+      title: 'Phân công tài xế cho vùng',
+      html: `
+        <div style="text-align: left; margin-bottom: 10px;">
+          <p>Chọn tài xế quản lý vùng này:</p>
+          <select id="swal-assign-driver" class="swal2-input" style="margin: 0; width: 100%; box-sizing: border-box; height: 45px;">
+            ${optionsHtml}
+          </select>
+        </div>
+      `,
+      focusConfirm: false,
+      showCancelButton: true,
+      cancelButtonText: 'Hủy',
+      confirmButtonText: 'Xác nhận gán',
+      preConfirm: () => {
+        return document.getElementById('swal-assign-driver').value;
+      }
+    });
+    
+    if (driverId !== undefined) {
+      const assignRes = await fetch('/api/units/assign-driver', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          driver_id: driverId ? parseInt(driverId) : null,
+          unit_ids: unitIds,
+          version_id: window.currentVersionId
+        })
+      });
+      
+      const assignResult = await assignRes.json();
+      if (assignResult.success) {
+        Swal.fire({
+          icon: 'success',
+          title: 'Thành công',
+          text: assignResult.message,
+          timer: 1500,
+          showConfirmButton: false
+        }).then(() => {
+          // Tải lại bản đồ và cập nhật stats panel
+          window.loadMapData();
+          window.updateStatsPanel();
+        });
+      } else {
+        Swal.fire('Lỗi', assignResult.message, 'error');
+      }
+    }
+  } catch (err) {
+    console.error("Lỗi showAssignDriverModal:", err);
+    Swal.fire('Lỗi', err.message, 'error');
+  }
+};
+
+// ============================================================
+// HÀM HIỂN THỊ MODAL GÁN NGẪU NHIÊN TÀI XẾ CHO CÁC VÙNG
+// ============================================================
+window.showRandomAssignDriversModal = async function() {
+  const provinceSelect = document.getElementById("province-select");
+  if (!provinceSelect) {
+    Swal.fire("Lỗi", "Không tìm thấy selector tỉnh thành!", "error");
+    return;
+  }
+  const provinceId = provinceSelect.value;
+  if (!provinceId) {
+    Swal.fire("Lỗi", "Vui lòng chọn Tỉnh/Thành phố trước!", "error");
+    return;
+  }
+
+  // Lấy các vùng hiện tại trên bản đồ (nhóm theo màu sắc)
+  if (!window.geoJsonLayer) {
+    Swal.fire("Lỗi", "Bản đồ chưa được tải xong!", "error");
+    return;
+  }
+
+  // Xác định các đa giác được chọn để phân chia (phân vùng)
+  let activeIds = null;
+  if (window.currentOptimOptions) {
+    const firstOpt = window.currentOptimOptions[0];
+    if (firstOpt && firstOpt.assignments) {
+      activeIds = Object.keys(firstOpt.assignments).map(Number);
+    }
+  }
+
+  let hasAnyPartitioned = false;
+  window.geoJsonLayer.eachLayer((layer) => {
+    if (layer.feature && layer.feature.properties) {
+      if (layer.feature.properties.is_partitioned === true || layer.feature.properties.is_partitioned === 'true') {
+        hasAnyPartitioned = true;
+      }
+    }
+  });
+
+  const statsMap = {};
+  window.geoJsonLayer.eachLayer((layer) => {
+    if (layer.feature && layer.feature.properties) {
+      const isPartitioned = layer.feature.properties.is_partitioned === true || layer.feature.properties.is_partitioned === 'true';
+      const unitId = layer.options.id || layer.feature.properties.id;
+      if (unitId) {
+        // Nếu đang trong chế độ preview: lọc theo activeIds. Nếu xem bình thường: lọc theo is_partitioned
+        if (activeIds) {
+          if (!activeIds.includes(parseInt(unitId))) return;
+        } else if (hasAnyPartitioned) {
+          if (!isPartitioned) return;
+        }
+        
+        const color = layer.feature.properties.color || "#3388ff";
+        if (!statsMap[color]) {
+          statsMap[color] = {
+            color: color,
+            unitIds: []
+          };
+        }
+        statsMap[color].unitIds.push(unitId);
+      }
+    }
+  });
+
+  const zones = Object.values(statsMap);
+  if (zones.length === 0) {
+    Swal.fire("Thông báo", "Không tìm thấy vùng nào đã được phân chia trên bản đồ!", "warning");
+    return;
+  }
+
+  try {
+    // 1. Tải danh sách tài xế
+    Swal.fire({
+      title: 'Đang tải...',
+      text: 'Vui lòng chờ giây lát',
+      allowOutsideClick: false,
+      didOpen: () => { Swal.showLoading(); }
+    });
+
+    const res = await fetch(`/api/drivers?province_id=${provinceId}&version_id=${window.currentVersionId}`);
+    const result = await res.json();
+    Swal.close();
+
+    if (!result.success) {
+      throw new Error(result.message || "Không thể tải danh sách tài xế");
+    }
+
+    const drivers = result.data || [];
+    if (drivers.length === 0) {
+      Swal.fire("Thông báo", "Không tìm thấy tài xế nào thuộc tỉnh này trong hệ thống!", "warning");
+      return;
+    }
+
+    // 2. Tạo giao diện danh sách checkbox tài xế
+    let driversHtml = '';
+    drivers.forEach(d => {
+      driversHtml += `
+        <div class="swal-driver-item" style="display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #f1f1f1; gap: 10px;">
+          <input type="checkbox" class="swal-driver-checkbox" value="${d.id}" id="driver-chk-${d.id}" checked style="width: 18px; height: 18px; cursor: pointer;">
+          <label for="driver-chk-${d.id}" style="cursor: pointer; font-size: 13px; font-weight: 500; color: #333; margin: 0; text-align: left; flex: 1;">
+            ${d.full_name} (${d.username})
+          </label>
+        </div>
+      `;
+    });
+
+    const { value: selectedDriverIds } = await Swal.fire({
+      title: 'Gán ngẫu nhiên tài xế',
+      width: '450px',
+      html: `
+        <div style="text-align: left; font-size: 13px; color: #666; margin-bottom: 12px; line-height: 1.4;">
+          Chọn các tài xế tham gia chạy ngẫu nhiên. Hệ thống sẽ phân bố ngẫu nhiên và công bằng các vùng đã chia cho các tài xế được chọn.
+        </div>
+        <div style="border: 1px solid #ddd; border-radius: 6px; overflow: hidden; background: #fff;">
+          <div style="display: flex; align-items: center; padding: 10px; border-bottom: 1px solid #ddd; background: #f9f9f9; gap: 10px;">
+            <input type="checkbox" id="swal-select-all-drivers" checked style="width: 18px; height: 18px; cursor: pointer;">
+            <label for="swal-select-all-drivers" style="cursor: pointer; font-size: 13px; font-weight: bold; color: #2c3e50; margin: 0; text-align: left; flex: 1;">
+              Chọn tất cả tài xế (${drivers.length})
+            </label>
+          </div>
+          <div id="swal-drivers-container" style="max-height: 250px; overflow-y: auto;">
+            ${driversHtml}
+          </div>
+        </div>
+      `,
+      showCancelButton: true,
+      confirmButtonText: 'Xác nhận gán ngẫu nhiên',
+      cancelButtonText: 'Hủy',
+      confirmButtonColor: '#27ae60',
+      focusConfirm: false,
+      didOpen: () => {
+        const selectAllChk = document.getElementById('swal-select-all-drivers');
+        const driverChks = document.querySelectorAll('.swal-driver-checkbox');
+
+        selectAllChk.addEventListener('change', (e) => {
+          driverChks.forEach(cb => {
+            cb.checked = e.target.checked;
+          });
+        });
+
+        driverChks.forEach(cb => {
+          cb.addEventListener('change', () => {
+            const allChecked = Array.from(driverChks).every(c => c.checked);
+            selectAllChk.checked = allChecked;
+          });
+        });
+      },
+      preConfirm: () => {
+        const checkedChks = document.querySelectorAll('.swal-driver-checkbox:checked');
+        const ids = Array.from(checkedChks).map(cb => parseInt(cb.value));
+        if (ids.length === 0) {
+          Swal.showValidationMessage('Vui lòng chọn ít nhất một tài xế!');
+          return false;
+        }
+        return ids;
+      }
+    });
+
+    if (!selectedDriverIds) return; // User cancel
+
+    // 3. Thực hiện gán ngẫu nhiên công bằng (shuffled round-robin)
+    Swal.fire({
+      title: 'Đang gán ngẫu nhiên...',
+      text: 'Đang phân phối các vùng cho tài xế',
+      allowOutsideClick: false,
+      didOpen: () => { Swal.showLoading(); }
+    });
+
+    // Shuffle danh sách tài xế
+    const shuffledDrivers = [...selectedDriverIds].sort(() => Math.random() - 0.5);
+
+    // Chuẩn bị các Promise gọi API gán
+    const promises = zones.map((zone, index) => {
+      const assignedDriverId = shuffledDrivers[index % shuffledDrivers.length];
+      return fetch('/api/units/assign-driver', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          driver_id: assignedDriverId,
+          unit_ids: zone.unitIds,
+          version_id: window.currentVersionId
+        })
+      }).then(r => r.json());
+    });
+
+    const results = await Promise.all(promises);
+    const hasError = results.some(r => !r.success);
+
+    Swal.close();
+
+    if (hasError) {
+      const errorMsg = results.find(r => !r.success)?.message || "Có lỗi xảy ra khi phân công tài xế";
+      Swal.fire('Thất bại', errorMsg, 'error');
+    } else {
+      Swal.fire({
+        icon: 'success',
+        title: 'Thành công',
+        text: `Đã phân bổ ngẫu nhiên ${zones.length} vùng cho ${selectedDriverIds.length} tài xế thành công!`,
+        timer: 2000,
+        showConfirmButton: false
+      }).then(() => {
+        window.loadMapData();
+        window.updateStatsPanel();
+      });
+    }
+
+  } catch (err) {
+    console.error("Lỗi showRandomAssignDriversModal:", err);
+    Swal.fire('Lỗi', err.message, 'error');
+  }
+};
 

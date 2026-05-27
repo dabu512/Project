@@ -108,29 +108,30 @@ router.post("/start", async (req, res) => {
       });
     }
 
-    // 2.5 Rebuild adjacencies for this version
-    await pool.query("DELETE FROM unit_adjacencies WHERE version_id = $1", [
-      version_id,
-    ]);
-    await pool.query(
-      `
-        INSERT INTO unit_adjacencies (unit_a_id, unit_b_id, version_id)
-        SELECT a.id, b.id, $1
-        FROM basic_units a
-        JOIN basic_units b ON a.id < b.id AND a.version_id = b.version_id
-        WHERE a.version_id = $1 
-          -- Dùng hệ tọa độ phẳng mét ST_Transform(geom, 3857) tăng tốc cực nhanh
-          AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
-          -- Buffer phẳng hệ mét siêu nhẹ:
-          AND ST_Area(
-              ST_Intersection(
-                  ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
-                  ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
-              )
-          ) > 0.1
-    `,
-      [version_id],
-    );
+    // 2.5 Kiểm tra và chỉ Rebuild kề nếu chưa được khởi tạo (bằng 0)
+    const adjCountRes = await pool.query("SELECT COUNT(*) FROM unit_adjacencies WHERE version_id = $1", [version_id]);
+    const adjCount = parseInt(adjCountRes.rows[0].count);
+    if (adjCount === 0) {
+      await pool.query(
+        `
+          INSERT INTO unit_adjacencies (unit_a_id, unit_b_id, version_id)
+          SELECT a.id, b.id, $1
+          FROM basic_units a
+          JOIN basic_units b ON a.id < b.id AND a.version_id = b.version_id
+          WHERE a.version_id = $1 
+            -- Dùng hệ tọa độ phẳng mét ST_Transform(geom, 3857) tăng tốc cực nhanh
+            AND ST_DWithin(ST_Transform(a.geom, 3857), ST_Transform(b.geom, 3857), 0.5)
+            -- Buffer phẳng hệ mét siêu nhẹ:
+            AND ST_Area(
+                ST_Intersection(
+                    ST_Buffer(ST_Transform(a.geom, 3857), 0.1), 
+                    ST_Buffer(ST_Transform(b.geom, 3857), 0.1)
+                )
+            ) > 0.1
+        `,
+        [version_id],
+      );
+    }
 
     // 3. Tạo bản ghi job
     const jobRes = await pool.query(
@@ -341,9 +342,16 @@ router.post("/apply", async (req, res) => {
       await client.query("SET CONSTRAINTS ALL DEFERRED");
       await client.query("SET session_replication_role = replica");
 
+      // B1: Đặt tất cả các ô trong phiên bản này thành chưa được phân chia (is_partitioned = FALSE)
+      await client.query(
+        "UPDATE basic_units SET is_partitioned = FALSE WHERE version_id = $1",
+        [version_id]
+      );
+
+      // B2: Cập nhật màu mới, xóa gán tài xế cũ, và đánh dấu là đã phân chia (is_partitioned = TRUE) cho các ô được chọn
       await client.query(`
         UPDATE basic_units AS b
-        SET color = c.color
+        SET color = c.color, driver_id = NULL, is_partitioned = TRUE
         FROM (SELECT unnest($1::text[]) AS id, unnest($2::text[]) AS color) AS c
         WHERE b.id::text = c.id AND b.version_id = $3
       `, [idUpdates, colorUpdates, version_id]);

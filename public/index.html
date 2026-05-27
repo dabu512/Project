@@ -142,9 +142,14 @@
         <div class="resizer resizer-rb"></div>
         <div class="stats-panel-header" id="stats-panel-drag-handle">
           <span><i class="fa-solid fa-chart-pie"></i> Thông số vùng</span>
-          <button onclick="window.toggleStatsPanel()" title="Đóng">
-            <i class="fa-solid fa-times"></i>
-          </button>
+          <div style="display:flex; align-items:center; gap:4px;">
+            <button id="stats-expand-btn" onclick="window.toggleStatsExpand()" title="Mở rộng">
+              <i class="fa-solid fa-expand"></i>
+            </button>
+            <button onclick="window.toggleStatsPanel()" title="Đóng">
+              <i class="fa-solid fa-times"></i>
+            </button>
+          </div>
         </div>
         <div class="stats-panel-body" id="stats-summary-content">
           <p class="empty-msg">Nhấn icon mắt để tải dữ liệu...</p>
@@ -288,6 +293,9 @@
               </button>
               <button class="sort-option-btn" data-sort="density" onclick="window.applySort('density', this, event)">
                 <i class="fa-solid fa-calculator"></i> Theo Mật độ (Đơn/Khách)
+              </button>
+              <button class="sort-option-btn" data-sort="color" onclick="window.applySort('color', this, event)">
+                <i class="fa-solid fa-palette"></i> Theo Màu sắc
               </button>
             </div>
           </div>

@@ -533,6 +533,11 @@ window.initGenericPanel = function(panelId, handleId) {
         if (clickedOnSelected) return;
 
         isDragging = true;
+        
+        // Ngăn chặn bôi đen chữ khi bắt đầu kéo vùng chọn
+        e.preventDefault();
+        document.body.style.userSelect = 'none';
+        
         const rect = mapEl.getBoundingClientRect();
         startX = e.clientX - rect.left;
         startY = e.clientY - rect.top;
@@ -574,6 +579,9 @@ window.initGenericPanel = function(panelId, handleId) {
         if (!isDragging) return;
         isDragging = false;
         selBox.style.display = 'none';
+
+        // Khôi phục lại khả năng chọn văn bản
+        document.body.style.userSelect = '';
 
         if (window._cursorMode !== 'select') return;
         if (!window.geoJsonLayer || typeof map === 'undefined') return;
@@ -617,6 +625,11 @@ window.initGenericPanel = function(panelId, handleId) {
 
         const countSpan = document.getElementById('bulk-count');
         if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
+        
+        // Đồng bộ sang các checkbox DOM dưới chân trang
+        if (window.syncSelectedCheckboxes) {
+            window.syncSelectedCheckboxes();
+        }
     });
 })();
 
@@ -975,7 +988,7 @@ window.deleteSelectedUnits = async function () {
 
 
 if (currentUser) {
-    var map = L.map('map').setView([21.02, 105.84], 14);
+    var map = L.map('map').setView([21.02, 105.84], 10.2);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors'
@@ -1220,8 +1233,13 @@ if (currentUser) {
             map.removeLayer(window.geoJsonLayer);
         }
 
-        // Tải ALL Units cho versionId cụ thể
-        fetch(`/api/units?versionId=${versionId || ''}`)
+        // Tải ALL Units cho versionId cụ thể hoặc driverId nếu là driver
+        let url = `/api/units?versionId=${versionId || ''}`;
+        if (currentUser && currentUser.role === 'driver') {
+            url = `/api/units?driverId=${currentUser.id}`;
+        }
+
+        fetch(url)
             .then(res => {
                 // --- CHỖ CẦN THÊM: Kiểm tra trạng thái Server ---
                 console.log("Status Code từ Server:", res.status);
@@ -1240,6 +1258,24 @@ if (currentUser) {
 
                 const layerGroup = L.geoJSON(data, {
                     style: function (f) {
+                        if (currentUser && currentUser.role === 'driver') {
+                            if (f.properties.is_my_zone === true) {
+                                return {
+                                    color: "#e67e22", // Màu viền cam đậm nổi bật
+                                    weight: 3, 
+                                    fillOpacity: 0.75,
+                                    fillColor: f.properties.color || '#ccc'
+                                };
+                            } else {
+                                return {
+                                    color: "#bdc3c7", // Màu xám nhạt
+                                    weight: 1, 
+                                    fillOpacity: 0.15,
+                                    fillColor: f.properties.color || '#ccc',
+                                    dashArray: "3, 5" // Viền đứt nét
+                                };
+                            }
+                        }
                         return {
                             color: "#333", weight: 2, fillOpacity: 0.5,
                             fillColor: f.properties.color || '#ccc'
@@ -1320,6 +1356,18 @@ if (currentUser) {
                         // --- CLICK: TOGGLE EDIT (khi isCustomEditMode) hoặc HIỆN THÔNG TIN ---
                         const areaFormatted = f.properties.area ? f.properties.area.toFixed(2) : "0.00";
                         l.on('click', function (e) {
+                            // --- BỎ QUA NẾU ĐANG DÙNG CÔNG CỤ GEOMAN ---
+                            // Đảm bảo click được nhường cho Geoman (vẽ, xóa, cắt, xoay...) và không xung đột
+                            if (map.pm && (
+                                (map.pm.globalDrawModeEnabled && map.pm.globalDrawModeEnabled()) ||
+                                (map.pm.globalDragModeEnabled && map.pm.globalDragModeEnabled()) ||
+                                (map.pm.globalRemovalModeEnabled && map.pm.globalRemovalModeEnabled()) ||
+                                (map.pm.globalCutModeEnabled && map.pm.globalCutModeEnabled()) ||
+                                (map.pm.globalRotateModeEnabled && map.pm.globalRotateModeEnabled())
+                            )) {
+                                return;
+                            }
+
                             // 1. Bulk select mode
                             if (window.isBulkSelectMode || (e.originalEvent && (e.originalEvent.shiftKey || e.originalEvent.ctrlKey))) {
                                 if (!unitId) return;
@@ -1339,8 +1387,7 @@ if (currentUser) {
                                     window.selectedUnitsList.push(unitId);
                                     if (l.getElement()) l.getElement().classList.add('marching-ants-path');
                                 }
-                                const countSpan = document.getElementById('bulk-count');
-                                if (countSpan) countSpan.innerText = window.selectedUnitsList.length;
+                                if (window.syncSelectedCheckboxes) window.syncSelectedCheckboxes();
                                 return;
                             }
 
@@ -1371,7 +1418,23 @@ if (currentUser) {
                                 return;
                             }
 
-                            // 3. Hiện panel thông tin bình thường
+                            // --- TÍNH NĂNG MỚI: CLICK LẠI ĐA GIÁC ĐANG CHỌN THÌ TỰ TẮT BOX THÔNG TIN ---
+                            if (window.currentSelectedLayer === l) {
+                                document.getElementById('unit-info-panel').classList.remove('visible');
+                                window.clearSelectedPolygon();
+                                
+                                if (unitId) {
+                                    const idx = window.selectedUnitsList.indexOf(unitId);
+                                    if (idx > -1) {
+                                        window.selectedUnitsList.splice(idx, 1);
+                                    }
+                                    if (l.getElement()) l.getElement().classList.remove('marching-ants-path');
+                                }
+                                if (window.syncSelectedCheckboxes) window.syncSelectedCheckboxes();
+                                return;
+                            }
+
+                            // 3. Hiện panel thông tin bình thường cho đa giác mới
                             const currentProps = f.properties;
                             currentProps.id = unitId;
                             updateSidebarStats(currentProps);
@@ -1382,33 +1445,42 @@ if (currentUser) {
                             // ✨ Highlight viền vàng polygon đang chọn
                             window.clearSelectedPolygon();          // Xóa highlight cũ
                             const selEl = l.getElement();
-                            if (selEl) selEl.classList.add('polygon-selected');
+                            if (selEl) {
+                                selEl.classList.add('polygon-selected');
+                                if (l.bringToFront) l.bringToFront(); // 👉 Đưa đa giác lên trên cùng để viền không bị đè
+                            }
                             window.currentSelectedLayer = l;        // Lưu lại để reset sau
 
                             // Highlight card trong danh sách quản lý (nếu panel đang mở)
                             if (window.highlightUnitCard) window.highlightUnitCard(unitId);
-                            const currentColor = f.properties.color || f.properties.zoneColor || '#cccccc';
-                            let colorRow = '';
-                            if (currentUser && currentUser.role === 'admin') {
-                                colorRow = `
-                                    <div class="panel-color-row">
-                                        <label>Màu đa giác:</label>
-                                        <input type="color" id="colorPicker-${unitId}" value="${currentColor}">
-                                        <button class="btn-change-color" onclick="changeUnitColor(${unitId})">Đổi Màu</button>
-                                    </div>
+                            // Click đơn bình thường: KHÔNG thêm vào selectedUnitsList
+                            // Chỉ khi giữ Ctrl/Shift hoặc bật chế độ quản lý chọn mới thêm vào danh sách chọn nhiều
+
+                            // Chỉ hiển thị panel thông tin khi click thật (có originalEvent), bỏ qua click giả lập từ card
+                            if (e.originalEvent) {
+                                const currentColor = f.properties.color || f.properties.zoneColor || '#cccccc';
+                                let colorRow = '';
+                                if (currentUser && currentUser.role === 'admin') {
+                                    colorRow = `
+                                        <div class="panel-color-row">
+                                            <label>Màu đa giác:</label>
+                                            <input type="color" id="colorPicker-${unitId}" value="${currentColor}">
+                                            <button class="btn-change-color" onclick="changeUnitColor(${unitId})">Đổi Màu</button>
+                                        </div>
+                                    `;
+                                }
+                                document.getElementById('unit-info-panel-title').innerHTML =
+                                    `<i class="fa-solid fa-map-pin"></i> 📦 ${f.properties.name}`;
+                                document.getElementById('unit-info-panel-body').innerHTML = `
+                                    <table>
+                                        <tr><td>Diện tích:</td><td>${areaFormatted} km²</td></tr>
+                                        <tr><td>Khách:</td><td>${f.properties.customers || 0}</td></tr>
+                                        <tr><td>Đơn:</td><td>${f.properties.orders || 0}</td></tr>
+                                    </table>
+                                    ${colorRow}
                                 `;
+                                document.getElementById('unit-info-panel').classList.add('visible');
                             }
-                            document.getElementById('unit-info-panel-title').innerHTML =
-                                `<i class="fa-solid fa-map-pin"></i> 📦 ${f.properties.name}`;
-                            document.getElementById('unit-info-panel-body').innerHTML = `
-                                <table>
-                                    <tr><td>Diện tích:</td><td>${areaFormatted} km²</td></tr>
-                                    <tr><td>Khách:</td><td>${f.properties.customers || 0}</td></tr>
-                                    <tr><td>Đơn:</td><td>${f.properties.orders || 0}</td></tr>
-                                </table>
-                                ${colorRow}
-                            `;
-                            document.getElementById('unit-info-panel').classList.add('visible');
                         });
 
                         l.on('pm:remove', () => {
@@ -1442,6 +1514,20 @@ if (currentUser) {
                 });
                 window.geoJsonLayer = layerGroup;
                 layerGroup.addTo(map);
+
+                // Tự động zoom đến vùng hoạt động của tài xế
+                if (currentUser && currentUser.role === 'driver') {
+                    const myZoneLayers = [];
+                    layerGroup.eachLayer(layer => {
+                        if (layer.feature && layer.feature.properties && layer.feature.properties.is_my_zone === true) {
+                            myZoneLayers.push(layer);
+                        }
+                    });
+                    if (myZoneLayers.length > 0) {
+                        const group = L.featureGroup(myZoneLayers);
+                        map.fitBounds(group.getBounds(), { padding: [30, 30] });
+                    }
+                }
 
                 // --- Cập nhật danh sách Ô đa giác ở sidebar ---
                 if (window.renderDistrictManagementList && data.features) {
@@ -1597,10 +1683,100 @@ if (currentUser) {
     };
 
     if (currentUser.role !== 'admin') {
+        // Ẩn các thành phần giao diện quản lý để tránh tài xế can thiệp dữ liệu
+        const adminTools = document.getElementById('admin-tools');
+        if (adminTools) adminTools.style.display = 'none';
+
+        const hierarchySection = document.getElementById('hierarchy-section');
+        if (hierarchySection) hierarchySection.style.display = 'none';
+
+        // Ẩn các nút "Thông số vùng" và "Quản lý ô đa giác" của admin
+        const btnStats = document.getElementById('btn-show-version-stats');
+        if (btnStats) btnStats.style.display = 'none';
+
+        const panelBtn = document.getElementById('bottom-panel-trigger');
+        if (panelBtn) panelBtn.style.display = 'none';
+
+        const bulkBtn = document.getElementById('toggle-bulk-mode-btn');
+        if (bulkBtn) bulkBtn.style.display = 'none';
+
         // Render map for driver - currently just loading all units as districts are gone
         window.loadMapData();
     }
 }
 
-
-
+// ================================================================
+// HÀM HIỂN THỊ MODAL HỒ SƠ TÀI XẾ
+// ================================================================
+window.showDriverProfileModal = async function() {
+    try {
+        const provincesRes = await fetch('/api/hierarchy/provinces');
+        const provincesData = await provincesRes.json();
+        
+        let provinceOptions = `<option value="">-- Chọn Tỉnh --</option>`;
+        if (provincesData.success && provincesData.data) {
+            provincesData.data.forEach(p => {
+                const selected = p.id === currentUser.province_id ? 'selected' : '';
+                provinceOptions += `<option value="${p.id}" ${selected}>${p.name}</option>`;
+            });
+        }
+        
+        const { value: formValues } = await Swal.fire({
+            title: 'Hồ sơ tài xế',
+            html: `
+                <div style="text-align: left; display: flex; flex-direction: column; gap: 10px;">
+                    <label><b>Họ và tên:</b></label>
+                    <input id="swal-driver-name" class="swal2-input" style="margin: 0; width: 100%; box-sizing: border-box;" value="${currentUser.full_name || ''}">
+                    
+                    <label><b>Mật khẩu mới (để trống nếu không đổi):</b></label>
+                    <input id="swal-driver-pass" type="password" class="swal2-input" style="margin: 0; width: 100%; box-sizing: border-box;" placeholder="Mật khẩu mới">
+                    
+                    <label><b>Tỉnh/Thành phố hoạt động:</b></label>
+                    <select id="swal-driver-province" class="swal2-input" style="margin: 0; width: 100%; box-sizing: border-box; height: 45px;">
+                        ${provinceOptions}
+                    </select>
+                </div>
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            cancelButtonText: 'Hủy',
+            confirmButtonText: 'Lưu thay đổi',
+            preConfirm: () => {
+                return {
+                    fullName: document.getElementById('swal-driver-name').value,
+                    password: document.getElementById('swal-driver-pass').value,
+                    province_id: document.getElementById('swal-driver-province').value
+                };
+            }
+        });
+        
+        if (formValues) {
+            const res = await fetch('/api/driver/profile', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    driverId: currentUser.id,
+                    fullName: formValues.fullName,
+                    password: formValues.password || undefined,
+                    province_id: formValues.province_id ? parseInt(formValues.province_id) : null
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                Swal.fire('Thành công', data.message, 'success').then(() => {
+                    const updatedUser = {
+                        ...currentUser,
+                        full_name: data.user.full_name,
+                        province_id: data.user.province_id
+                    };
+                    localStorage.setItem('user', JSON.stringify(updatedUser));
+                    location.reload();
+                });
+            } else {
+                Swal.fire('Lỗi', data.message, 'error');
+            }
+        }
+    } catch (err) {
+        Swal.fire('Lỗi hệ thống', err.message, 'error');
+    }
+};

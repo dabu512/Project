@@ -288,12 +288,10 @@ button {
 
 /* Viền vàng khi click vào polygon để xem thông tin (khác bulk select) */
 .polygon-selected {
-  stroke-dasharray: 8 5;
-  animation: marching-ants 0.7s linear infinite;
-  stroke: #f39c12 !important;
-  stroke-width: 3.5px !important;
+  stroke: #ec0909 !important;
+  stroke-width: 5px !important; /* 👉 Tăng độ dày viền */
   fill-opacity: 0.75 !important;
-  filter: drop-shadow(0 0 4px rgba(243, 156, 18, 0.7));
+  filter: drop-shadow(0 0 8px rgba(236, 9, 9, 0.8)); /* 👉 Đổ bóng phát sáng mạnh và cùng màu hơn */
 }
 
 #btn-show-version-stats {
@@ -364,6 +362,14 @@ body.management-panel-open #btn-show-version-stats {
   border: 1px solid #ddd;
   transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
+}
+
+#stats-summary-panel.stats-expanded {
+  width: 600px !important;
+  height: calc(100vh - 80px) !important;
+  right: 10px !important;
+  top: 70px !important;
+  transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 body.management-panel-open #stats-summary-panel {
@@ -1615,4 +1621,3 @@ body.sidebar-open .leaflet-control-container .leaflet-top.leaflet-left {
   color: var(--accent);
   font-weight: 700;
 }
-

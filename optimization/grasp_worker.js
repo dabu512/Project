@@ -783,9 +783,29 @@ async function runGRASP(versionId, config, lambdaParam = 0.70) {
   const assignments = {};
   const globalAssigned = new Set(); // Global conflict check để ngăn đếm lặp 1 ô cho nhiều vùng
 
+  // Danh sách các màu chất lượng cao, độ tương phản cực lớn và rất dễ phân biệt trên bản đồ
+  const DISTINCT_COLORS = [
+    "#e74c3c", // Đỏ (Red)
+    "#3498db", // Xanh dương (Blue)
+    "#2ecc71", // Xanh lá (Green)
+    "#f1c40f", // Vàng (Yellow)
+    "#9b59b6", // Tím (Purple)
+    "#e67e22", // Cam (Orange)
+    "#1abc9c", // Ngọc bích (Teal)
+    "#e84393", // Hồng rực (Pink)
+    "#2c3e50", // Xanh navy (Dark Navy)
+    "#badc58", // Xanh nõn chuối (Lime)
+    "#a29bfe", // Tím oải hương (Lavender)
+    "#ff7675", // Đỏ san hô (Coral)
+    "#55efc4", // Xanh bạc hà (Mint)
+    "#6c5ce7", // Tím sẫm (Deep Indigo)
+    "#0984e3", // Xanh coban (Cobalt Blue)
+    "#00b894", // Xanh lục bảo (Emerald)
+    "#fd79a8"  // Hồng sen (Rose)
+  ];
+
   for (let i = 0; i < p; i++) {
-    const hue = (i * 137.5) % 360;
-    const color = hslToHex(hue, 75, 55);
+    const color = i < DISTINCT_COLORS.length ? DISTINCT_COLORS[i] : hslToHex((i * 137.5) % 360, 80, 50);
     let t = bestSolution[i];
 
     let uniqueUnits = [];
@@ -877,8 +897,8 @@ async function runGRASP(versionId, config, lambdaParam = 0.70) {
         assignments: opt1.assignments
       },
       {
-        name: "Phương án 2: Cân bằng tối ưu",
-        description: "Cân đối hài hòa giữa độ gọn gàng hình học của các vùng và phân bổ số lượng khách hàng/đơn hàng tương đối đồng đều.",
+        name: "Phương án 2: Cân bằng giữa tính nhỏ gọn và khách hàng",
+        description: "Cân đối hài hòa giữa độ gọn gàng hình học của các vùng (tính nhỏ gọn) và phân bổ số lượng khách hàng tương đối đồng đều.",
         lambda: 0.70,
         metrics: {
           bestRho: opt2.bestRho,
@@ -892,8 +912,8 @@ async function runGRASP(versionId, config, lambdaParam = 0.70) {
         assignments: opt2.assignments
       },
       {
-        name: "Phương án 3: Cân bằng tải trọng",
-        description: "Ưu tiên tối đa việc chia khách hàng/đơn hàng cực kỳ đồng đều giữa các vùng, đồng thời duy trì độ liên thông và tránh hình dạng quá méo mó.",
+        name: "Phương án 3: Cân bằng tải trọng khách hàng",
+        description: "Ưu tiên tối đa việc chia số lượng khách hàng cực kỳ đồng đều giữa các vùng, không phụ thuộc vào số lượng đơn hàng hay mật độ.",
         lambda: 0.40,
         metrics: {
           bestRho: opt3.bestRho,
